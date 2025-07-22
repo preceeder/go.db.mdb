@@ -1,7 +1,7 @@
 package mdb
 
 import (
-	"github.com/preceeder/go/base"
+	"github.com/preceeder/go.base"
 	"testing"
 )
 

@@ -9,7 +9,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/panjf2000/ants/v2 v2.11.3
 	github.com/pkg/errors v0.9.1
-	github.com/preceeder/go/base v1.0.10
+	github.com/preceeder/go.base v1.0.0
 )
 
 require (

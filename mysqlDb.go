@@ -7,7 +7,7 @@ import (
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
-	"github.com/preceeder/go/base"
+	"github.com/preceeder/go.base"
 	"log/slog"
 	"reflect"
 	"strings"
