@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-var IgnoreColumnHandlerRe = regexp.MustCompile("^([^.,]+.|)(\\d+|'[\\S\\s]+'|\"[\\S\\s]+\"|`[\\S\\s]+`(\\.`[^`]+`.*|)|\\*)$")
+var IgnoreColumnHandlerRe = regexp.MustCompile("^([^.,]+\\.)?(\\d+|'[^']+'|\"[^\"]+\"|`[^`]+`(\\.`[^`]+`.*)?|\\*)$|(\\b[\\w]+\\.\\`[^`]+\\`)")
 var DateRe = regexp.MustCompile("^\\d{4}-\\d{2}-\\d{2}$")
 var DateTimeRe = regexp.MustCompile("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}\\d{2}$")
 

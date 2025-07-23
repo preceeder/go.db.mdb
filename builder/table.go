@@ -8,6 +8,7 @@ import (
 type table struct {
 	Db         string // 所归属的数据库， 默认是不需要的
 	Name       string
+	Label      string
 	ForceIndex string
 }
 
@@ -18,12 +19,13 @@ func (t table) GetName() string {
 		bf.WriteString(".")
 	}
 	bf.WriteString(t.Name)
+	//bf.WriteString(" ")
 	return bf.String()
 }
 
 type join struct {
 	JoinType string // left| right   默认 left
-	Table    SqlBuilder
+	SubTable SqlBuilder
 	Value    map[string]any
 	On       Expr
 }
@@ -45,15 +47,21 @@ type SqlBuilder struct {
 
 	GroupParam  []Field
 	HavingParam Expr
-	Label       string         // 设置这个了 会在 将整个查询用小括号包裹, 加上别名
+	label       string         // 设置这个了 会在 将整个查询用小括号包裹, 加上别名
 	Values      map[string]any // 需要的参数 存储在这里
 
 	UnionBuilder []union // union 操作
 }
 
-// As as 只有 表名 和 field , 查询结果 可以使用
+// 表的别名
 func (s *SqlBuilder) As(label string) *SqlBuilder {
-	s.Label = label
+	s.Table.Label = label
+	return s
+}
+
+// 子查询的别名， 这个需要在子查询的最后使用， 不要提前使用， 不然会和上面的as有冲突
+func (s *SqlBuilder) Label(label string) *SqlBuilder {
+	s.label = label
 	return s
 }
 
@@ -73,10 +81,14 @@ func (s *SqlBuilder) Select(fields ...any) *SqlBuilder {
 
 // Field
 // 获取字段
-func (s *SqlBuilder) Field(field string, rename ...string) Fd {
+func (s *SqlBuilder) Field(field string) Fd {
 	bf := bytes.Buffer{}
-	if s.Label != "" {
-		bf.WriteString(s.Label)
+	if s.label != "" {
+		bf.WriteString(s.label)
+		bf.WriteString(".")
+		bf.WriteString(field)
+	} else if s.Table.Label != "" {
+		bf.WriteString(s.Table.Label)
 		bf.WriteString(".")
 		bf.WriteString(field)
 	} else {
@@ -147,7 +159,7 @@ func (s *SqlBuilder) First() *SqlBuilder {
 // Join
 // joinType  left|right
 func (s *SqlBuilder) join(table SqlBuilder, on Expr, joinType string) *SqlBuilder {
-	s.JoinTable = append(s.JoinTable, join{JoinType: joinType, Table: table, On: on})
+	s.JoinTable = append(s.JoinTable, join{JoinType: joinType, SubTable: table, On: on})
 	return s
 }
 
@@ -180,14 +192,39 @@ func (s *SqlBuilder) Union(table *SqlBuilder, unionType ...string) *SqlBuilder {
 	return s
 }
 
+func (s *SqlBuilder) getDelete(t ...*SqlBuilder) string {
+	bf := bytes.Buffer{}
+	bf.WriteString("DELETE ")
+
+	if len(t) > 0 {
+		if t[0].label != "" {
+			bf.WriteString(t[0].label)
+		} else if t[0].Table.Label != "" {
+			bf.WriteString(t[0].Table.Label)
+		} else {
+			bf.WriteString(t[0].Table.GetName())
+		}
+	}
+	return bf.String()
+}
+
+func (s *SqlBuilder) getInsert() string {
+	bf := bytes.Buffer{}
+	bf.WriteString("INSERT INTO ")
+	bf.WriteString(s.Table.GetName())
+	return bf.String()
+}
+
 // noDefault 不要默认的格式
 func (s *SqlBuilder) getSelect(noDefault bool) (string, map[string]any) {
 	bf := bytes.Buffer{}
 	var value = map[string]any{}
-	if !noDefault {
-		bf.WriteString("select ")
-	}
+	//if !noDefault {
+	//	bf.WriteString("select ")
+	//}
+
 	if len(s.FieldParam) > 0 {
+		bf.WriteString("select ")
 		for _, field := range s.FieldParam {
 			bf.WriteString(field)
 			bf.WriteString(", ")
@@ -195,6 +232,8 @@ func (s *SqlBuilder) getSelect(noDefault bool) (string, map[string]any) {
 		bf.Truncate(bf.Len() - 2)
 	} else {
 		if !noDefault {
+			bf.WriteString("select ")
+
 			bf.WriteString(" * ")
 		}
 	}
@@ -210,21 +249,27 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 	bf := bytes.Buffer{}
 	bf.WriteString(s.Table.GetName())
 
+	if s.Table.Label != "" {
+		bf.WriteString(" AS ")
+		bf.WriteString(s.Table.Label)
+	}
+
 	if s.Table.ForceIndex != "" {
 		bf.WriteString(" ")
 		bf.WriteString(s.Table.ForceIndex)
 	}
+
 	if len(s.JoinTable) > 0 {
 		for _, jt := range s.JoinTable {
 			bf.WriteString(" ")
 			bf.WriteString(jt.JoinType)
 			bf.WriteString(" join ")
-			tb, paramsData := jt.Table.subQuery() // 这里可能是 子查询
-			if jt.Table.Label != "" {
+			tb, paramsData := jt.SubTable.subQuery() // 这里可能是 子查询
+			if jt.SubTable.label != "" {
 				bf.WriteString("(")
 				bf.WriteString(tb)
 				bf.WriteString(") ")
-				bf.WriteString(jt.Table.Label)
+				bf.WriteString(jt.SubTable.label)
 			} else {
 				bf.WriteString(tb)
 			}
@@ -258,8 +303,8 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 		}
 		bf.Truncate(bf.Len() - endLen)
 		bf.WriteString(" ) ")
-		if s.Label != "" {
-			bf.WriteString(s.Label)
+		if s.label != "" {
+			bf.WriteString(s.label)
 		}
 	}
 
@@ -356,22 +401,10 @@ func (s *SqlBuilder) subQuery() (string, map[string]any) {
 	return s.commonQuery(bf, value)
 }
 
-func (s *SqlBuilder) Query() (string, map[string]any) {
-	var value = map[string]any{}
-	bf := bytes.Buffer{}
-	// select
-	sl, data := s.getSelect(false)
-	bf.WriteString(sl)
-	for k, v := range data {
-		value[k] = v
-	}
-	return s.commonQuery(bf, value)
-}
-
 func (s *SqlBuilder) commonQuery(bf bytes.Buffer, value map[string]any) (string, map[string]any) {
 
 	if bf.Len() > 0 {
-		bf.WriteString(" from ")
+		bf.WriteString(" FROM ")
 	}
 	// table
 	sl, data := s.getTable()
@@ -401,3 +434,57 @@ func (s *SqlBuilder) commonQuery(bf bytes.Buffer, value map[string]any) (string,
 	bf.WriteString(s.getLimit())
 	return bf.String(), value
 }
+
+func (s *SqlBuilder) Query() (string, map[string]any) {
+	var value = map[string]any{}
+	bf := bytes.Buffer{}
+	// select
+	sl, data := s.getSelect(false)
+	bf.WriteString(sl)
+	for k, v := range data {
+		value[k] = v
+	}
+	return s.commonQuery(bf, value)
+}
+
+// 删除数据
+// t 要删除的表
+func (s *SqlBuilder) Delete(t ...*SqlBuilder) (string, map[string]any) {
+	// delete t_user from t_user left join t_user_info on t_user.id=t_user_info.user_id where t_user.id =1
+	// delete u from t_user u left join t_user_info ti  on u.id=ti.user_id where u.id =1
+	// delete from t_user where id = 0
+	var value = map[string]any{}
+	bf := bytes.Buffer{}
+	// select
+	sl := s.getDelete(t...)
+	bf.WriteString(sl)
+	return s.commonQuery(bf, value)
+}
+
+// 插入有单条也有多条数据的
+func (s *SqlBuilder) Insert(t ...Expr) {
+	// insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3) duplicate key update name=values(name)
+	// duplicate key update name=values(name) 中的 name = values(name) 使用于 MySQL ≤ 8.0.19
+	//insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3)  as new duplicate key update name=new.name // MySQL ≥ 8.0
+	// 当前我们使用的是 8.0以上版本就使用 as 方式
+	t[0].Values()
+	for _, v := range t {
+		fmt.Println(v.String())
+		fmt.Println(v.Values())
+		fmt.Println(v.GetName())
+	}
+
+	//var value = map[string]any{}
+	//bf := bytes.Buffer{}
+	//sl := s.getInsert()
+	//bf.WriteString(sl)
+
+}
+
+//func (s *SqlBuilder) InsertMany() (string, map[string]any) {
+//	// insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3) duplicate key update name=values(name)
+//	// duplicate key update name=values(name) 中的 name = values(name) 使用于 MySQL ≤ 8.0.19
+//	//insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3)  as new duplicate key update name=new.name // MySQL ≥ 8.0
+//	// 当前我们使用的是 8.0以上版本就使用 as 方式
+//
+//}
