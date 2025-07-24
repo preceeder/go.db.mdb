@@ -104,6 +104,7 @@ func (f Fd) Asc() Fd {
 func (f Fd) Eq(value any, key ...string) Expr {
 	return eq(f.String(), value, key...)
 }
+
 func (f Fd) NotEq(value any, key ...string) Expr {
 	return notEq(f.String(), value, key...)
 }
@@ -111,6 +112,7 @@ func (f Fd) NotEq(value any, key ...string) Expr {
 func (f Fd) Lte(value any, key ...string) Expr {
 	return lte(f.String(), value, key...)
 }
+
 func (f Fd) Lt(value any, key ...string) Expr {
 	return lt(f.String(), value, key...)
 }

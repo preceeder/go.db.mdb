@@ -138,6 +138,9 @@ func isNotNull(field string) Expr {
 	return Condition{Name: field, S: str}
 }
 
+// name Symbol value
+// func(value)
+// name symbol
 // IsNull
 // field 列名
 func isNull(field string) Expr {
@@ -193,6 +196,15 @@ func notIn(field string, d any, key ...string) Expr {
 		}
 	}
 	return handler(str, field, d, key...)
+}
+
+func NotExists(str string) Expr {
+	bf := bytes.Buffer{}
+	bf.WriteString("NOT EXISTS (")
+	bf.WriteString(str)
+	bf.WriteString(")")
+	//str[len(str)-1] = ")"
+	return Condition{Name: "", S: bf.String()}
 }
 
 //	[][]Expr{
@@ -252,12 +264,4 @@ func And(expr ...Expr) Expr {
 		bf.Truncate(0)
 	}
 	return Condition{Name: "", Value: &value, S: bf.String()}
-}
-func NotExists(str string) Expr {
-	bf := bytes.Buffer{}
-	bf.WriteString("NOT EXISTS (")
-	bf.WriteString(str)
-	bf.WriteString(")")
-	//str[len(str)-1] = ")"
-	return Condition{Name: "", S: bf.String()}
 }

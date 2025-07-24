@@ -48,9 +48,12 @@ type SqlBuilder struct {
 	GroupParam  []Field
 	HavingParam Expr
 	label       string         // 设置这个了 会在 将整个查询用小括号包裹, 加上别名
-	Values      map[string]any // 需要的参数 存储在这里
+	values      map[string]any // 需要的参数 存储在这里
 
 	UnionBuilder []union // union 操作
+
+	insertColumns []string
+	insertValues  []any
 }
 
 // 表的别名
@@ -460,31 +463,3 @@ func (s *SqlBuilder) Delete(t ...*SqlBuilder) (string, map[string]any) {
 	bf.WriteString(sl)
 	return s.commonQuery(bf, value)
 }
-
-// 插入有单条也有多条数据的
-func (s *SqlBuilder) Insert(t ...Expr) {
-	// insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3) duplicate key update name=values(name)
-	// duplicate key update name=values(name) 中的 name = values(name) 使用于 MySQL ≤ 8.0.19
-	//insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3)  as new duplicate key update name=new.name // MySQL ≥ 8.0
-	// 当前我们使用的是 8.0以上版本就使用 as 方式
-	t[0].Values()
-	for _, v := range t {
-		fmt.Println(v.String())
-		fmt.Println(v.Values())
-		fmt.Println(v.GetName())
-	}
-
-	//var value = map[string]any{}
-	//bf := bytes.Buffer{}
-	//sl := s.getInsert()
-	//bf.WriteString(sl)
-
-}
-
-//func (s *SqlBuilder) InsertMany() (string, map[string]any) {
-//	// insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3) duplicate key update name=values(name)
-//	// duplicate key update name=values(name) 中的 name = values(name) 使用于 MySQL ≤ 8.0.19
-//	//insert into table(id, name) values(id1, anme1),(id2, name2),(id3, name3)  as new duplicate key update name=new.name // MySQL ≥ 8.0
-//	// 当前我们使用的是 8.0以上版本就使用 as 方式
-//
-//}
