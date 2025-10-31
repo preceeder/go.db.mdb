@@ -19,14 +19,14 @@ type MysqlClient struct {
 }
 
 type MysqlConfig struct {
-	Host        string `json:"host"`
-	Port        string `json:"port"`
-	Password    string `json:"password"`
-	User        string `json:"user"`
-	Db          string `json:"db"`
-	MaxOpenCons int    `json:"maxOpenCons"`
-	MaxIdleCons int    `json:"MaxIdleCons"`
-	Params      string `json:"params"` // 其他配置数据, 放在链接后面的参数重
+	Host        string `json:"host" yaml:"host"`
+	Port        string `json:"port" yaml:"port"`
+	Password    string `json:"password" yaml:"password"`
+	User        string `json:"user" yaml:"user"`
+	Db          string `json:"database" yaml:"database"`
+	MaxOpenCons int    `json:"maxOpenCons" yaml:"maxOpenCons"`
+	MaxIdleCons int    `json:"MaxIdleCons" yaml:"MaxIdleCons"`
+	Params      string `json:"params" json:"params"` // 其他配置数据, 放在链接后面的参数重
 }
 
 func NewMysqlClient(config MysqlConfig) MysqlClient {
