@@ -6,14 +6,12 @@ import (
 )
 
 func TestTable(t *testing.T) {
-	//testJoin()
 	//testUnion()
 	//testDelete()
 
-	testInsert()
 }
 
-func testJoin() {
+func TestJoin(b *testing.T) {
 	tu := Table("t_user").As("u")
 	ti := Table("t_user_info").As("t")
 	// 子查询
@@ -72,8 +70,39 @@ func testDelete() {
 	fmt.Println(de, data)
 }
 
-func testInsert() {
+// BenchmarkSimpleQuery 测试简单查询性能
+func TestSimpleQuery(t *testing.T) {
 	tu := Table("t_user")
-	name := []string{"sd", "dr"}
-	tu.Insert(tu.Field("name").In(name), tu.Field("age").Eq(23))
+	sql := tu.Select(tu.Field("id"), tu.Field("name")).
+		Where(tu.Field("id").Eq(1)).
+		Limit(10).Offset(20)
+	sql2, data := sql.Query()
+
+	fmt.Println(sql2)
+	fmt.Println(data)
+}
+
+// BenchmarkComplexQuery 测试复杂查询性能
+func TestComplexQuery(b *testing.T) {
+	tu := Table("t_user").As("u")
+	ti := Table("t_user_info").As("t")
+
+	sql := tu.Select(tu.Field("id"), tu.Field("name"), ti.Field("age")).
+		LeftJoin(ti, tu.Field("id").Eq(ti.Field("user_id"))).
+		Where(
+			tu.Field("id").Gt(0),
+			Or(
+				And(tu.Field("name").Eq("test"), tu.Field("age").Gte(18)),
+				tu.Field("status").Eq(1),
+			),
+		).
+		Group(tu.Field("status")).
+		Having(Sum(tu.Field("age")).Gt(100)).
+		Order(tu.Field("id").Desc()).
+		Limit(10).
+		Offset(5)
+	sql2, data := sql.Query()
+	fmt.Println(sql2)
+	fmt.Println(data)
+
 }

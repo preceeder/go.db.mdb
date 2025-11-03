@@ -5,7 +5,8 @@ import (
 	"fmt"
 )
 
-// Field 将字符串变为 Fd类型
+// NewField 创建一个新的字段对象
+// field 字段名或表达式
 func NewField(field string) Fd {
 	fd := &Fd{field: field, s: "%s", v: []any{field}}
 	fd.ColumnNameHandler()
@@ -47,19 +48,21 @@ func (f *Fd) ColumnNameHandler() {
 	}
 }
 
+// LabelHandler 处理字段标签，将占位符替换为实际值
 func (f *Fd) LabelHandler() {
-	var value []any = make([]any, 0)
 	if f.values == nil {
 		f.values = make(map[string]any)
 	}
+
+	var value []any = make([]any, 0, len(f.v))
 	for _, vv := range f.v {
 		if vv == nil {
-			value = append(value, "null")
+			value = append(value, "NULL")
 			continue
 		}
-		switch vv.(type) {
+
+		switch val := vv.(type) {
 		case Expr:
-			val := vv.(Expr)
 			value = append(value, val.String())
 			if val.Values() != nil {
 				for k, v := range *val.Values() {
@@ -67,7 +70,6 @@ func (f *Fd) LabelHandler() {
 				}
 			}
 		case Field:
-			val := vv.(Field)
 			value = append(value, val.String())
 			if val.Values() != nil {
 				for k, v := range *val.Values() {
@@ -75,15 +77,14 @@ func (f *Fd) LabelHandler() {
 				}
 			}
 		case string:
-			value = append(value, "'"+vv.(string)+"'")
+			// 注意：直接拼接字符串，字符串中的单引号需要转义
+			// 建议在构建 SQL 时使用参数化查询
+			value = append(value, "'"+val+"'")
 		default:
-
 			value = append(value, vv)
-
 		}
 	}
 	f.s = fmt.Sprintf(f.s, value...)
-	return
 }
 
 func (f Fd) Desc() Fd {
@@ -231,12 +232,10 @@ func (f Fd) Like(value string) Expr {
 	return like(f.String(), value)
 }
 
+func (f Fd) Min() Fd {
+	return Min(f)
+}
+
 func (f Fd) Max() Fd {
-	ff := &Fd{
-		v: []any{f},
-		s: "MAX(%v)",
-	}
-	ff.ColumnNameHandler()
-	ff.LabelHandler()
-	return *ff
+	return Max(f)
 }

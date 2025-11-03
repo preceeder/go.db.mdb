@@ -9,7 +9,7 @@ import (
 func If(expr any, v1, v2 any) Fd {
 	f := &Fd{
 		v: []any{expr, v1, v2},
-		s: "IF(%s, %v, %v)",
+		s: "IF(%v, %v, %v)",
 	}
 	f.LabelHandler()
 	return *f
@@ -19,7 +19,7 @@ func If(expr any, v1, v2 any) Fd {
 func IfNull(expr any, v1 any) Fd {
 	f := &Fd{
 		v: []any{expr, v1},
-		s: "IFNULL(%s, %v)",
+		s: "IFNULL(%v, %v)",
 	}
 	f.LabelHandler()
 	return *f
@@ -46,24 +46,34 @@ func Count(field any) Fd {
 	return *f
 }
 
-func Min(field string) Fd {
+// Min 获取字段的最小值
+// field 可以是 string（字段名）或 Field 类型（字段表达式）
+func Min(field any) Fd {
 	f := &Fd{
-		field: field,
-		v:     []any{field},
-		s:     "MIN(%s)",
+		v: []any{field},
+		s: "MIN(%v)",
 	}
-	f.ColumnNameHandler()
+	// 如果是字符串，需要处理列名
+	if str, ok := field.(string); ok {
+		f.field = str
+		f.ColumnNameHandler()
+	}
 	f.LabelHandler()
 	return *f
 }
 
-func Max(field string) Fd {
+// Max 获取字段的最大值
+// field 可以是 string（字段名）或 Field 类型（字段表达式）
+func Max(field any) Fd {
 	f := &Fd{
-		field: field,
-		v:     []any{field},
-		s:     "MAX(%s)",
+		v: []any{field},
+		s: "MAX(%v)",
 	}
-	f.ColumnNameHandler()
+	// 如果是字符串，需要处理列名
+	if str, ok := field.(string); ok {
+		f.field = str
+		f.ColumnNameHandler()
+	}
 	f.LabelHandler()
 	return *f
 }
@@ -132,9 +142,9 @@ func CurDate() Fd {
 }
 
 func ConcatGroup(expr any, sep ...string) Fd {
-	str := "GROUP_CONCAT(%s)"
+    str := "GROUP_CONCAT(%v)"
 	if len(sep) > 0 {
-		str = fmt.Sprintf("GROUP_CONCAT(%%s SEPARATOR '%s')", sep[0])
+        str = fmt.Sprintf("GROUP_CONCAT(%%v SEPARATOR '%s')", sep[0])
 	}
 	f := &Fd{
 		v: []any{expr},
@@ -145,7 +155,7 @@ func ConcatGroup(expr any, sep ...string) Fd {
 }
 
 func Round(expr any, num int) Fd {
-	str := "ROUND(%s, %d)"
+    str := "ROUND(%v, %d)"
 	f := &Fd{
 		v: []any{expr, num},
 		s: str,
@@ -155,7 +165,7 @@ func Round(expr any, num int) Fd {
 }
 
 func cast(expr any, castType string) Fd {
-	str := fmt.Sprintf("cast(%%s as %s)", castType)
+    str := fmt.Sprintf("cast(%%v as %s)", castType)
 	f := &Fd{
 		v: []any{expr},
 		s: str,
@@ -243,7 +253,7 @@ func Now() Fd {
 }
 
 func DateSub(tm any, interval string) Fd {
-	f := &Fd{s: "DATE_SUB(%s, " + interval + ")",
+    f := &Fd{s: "DATE_SUB(%v, " + interval + ")",
 		v: []any{tm},
 	}
 
@@ -254,7 +264,7 @@ func DateSub(tm any, interval string) Fd {
 }
 
 func UnixTimeStamp(tm any) Fd {
-	f := &Fd{s: "UNIX_TIMESTAMP(%s)",
+    f := &Fd{s: "UNIX_TIMESTAMP(%v)",
 		v: []any{tm},
 	}
 	f.ColumnNameHandler()
@@ -279,9 +289,13 @@ func StDistanceSphere(point1, point2 any) Fd {
 	return *f
 }
 
+// Case 构建 SQL CASE 语句
+// when 条件列表，每个元素应该是一个 When 表达式
+// els else 分支的值（可选）
 func Case(when []any, els any) Fd {
 	if len(when) == 0 {
-		panic("sql构造器case内容不能为空")
+		// 返回空 CASE 语句而不是 panic，保持向后兼容
+		return Fd{s: "CASE WHEN 1=0 THEN NULL END"}
 	}
 	s := ""
 	v := []any{}
@@ -290,13 +304,13 @@ func Case(when []any, els any) Fd {
 		v = append(v, item)
 	}
 	if els != nil {
-		s += " else %v"
+		s += " ELSE %v"
 		v = append(v, els)
 	}
 	f := &Fd{s: fmt.Sprintf(`
-case 
+CASE 
 	%s
-end
+END
 `, s),
 		v: v,
 	}

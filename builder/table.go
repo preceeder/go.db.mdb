@@ -2,7 +2,9 @@ package builder
 
 import (
 	"bytes"
-	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 type table struct {
@@ -39,9 +41,9 @@ type SqlBuilder struct {
 	JoinTable  []join
 	FieldParam []string
 
-	WhereParam   []Expr
-	LimitParam   int
-	OffSetParams int
+	WhereParam  []Expr
+	LimitParam  int
+	OffsetParam int // 修复命名: OffSetParams -> OffsetParam
 
 	OrderParam []Field
 
@@ -54,29 +56,48 @@ type SqlBuilder struct {
 
 	insertColumns []string
 	insertValues  []any
+
+	// data holders for DML
+	// 不强制使用这些字段，提供便捷 DML 构建方法
+
+    // FromSubQuery 表示该查询的 FROM 来源是一个子查询
+    FromSubQuery *SqlBuilder
 }
 
-// 表的别名
+// As 设置表的别名
 func (s *SqlBuilder) As(label string) *SqlBuilder {
 	s.Table.Label = label
 	return s
 }
 
-// 子查询的别名， 这个需要在子查询的最后使用， 不要提前使用， 不然会和上面的as有冲突
+// Label 设置子查询的别名
+// 注意：这个需要在子查询的最后使用，不要提前使用，不然会和上面的 As 有冲突
 func (s *SqlBuilder) Label(label string) *SqlBuilder {
 	s.label = label
 	return s
 }
 
-// Select
-// fields 可以是 string | funcs.Field
+// FromSub 将另一个构建器作为当前查询的 FROM 子查询来源
+// 示例：
+//   sub := Table("t").Select(...).Group(...).Label("sub")
+//   q := Table("").FromSub(sub).Select(q.Field("col")).Query()
+func (s *SqlBuilder) FromSub(sub *SqlBuilder) *SqlBuilder {
+    s.FromSubQuery = sub
+    if sub != nil && sub.label != "" {
+        s.label = sub.label
+    }
+    return s
+}
+
+// Select 设置查询的字段列表
+// fields 可以是 string 或 Field 类型
 func (s *SqlBuilder) Select(fields ...any) *SqlBuilder {
 	for _, fd := range fields {
-		switch fd.(type) {
+		switch val := fd.(type) {
 		case string:
-			s.FieldParam = append(s.FieldParam, fd.(string))
+			s.FieldParam = append(s.FieldParam, val)
 		case Field:
-			s.FieldParam = append(s.FieldParam, fd.(Field).String())
+			s.FieldParam = append(s.FieldParam, val.String())
 		}
 	}
 	return s
@@ -110,8 +131,14 @@ func (s *SqlBuilder) Field(field string) Fd {
 	return fd
 }
 
+// ForceIndex 强制使用指定的索引
+// 注意：使用此方法会强制 MySQL 使用指定索引，可能导致性能问题
 func (s *SqlBuilder) ForceIndex(indexName string) *SqlBuilder {
-	s.Table.ForceIndex = fmt.Sprintf("force index(%s)", indexName)
+	var bf bytes.Buffer
+	bf.WriteString("FORCE INDEX(`")
+	bf.WriteString(indexName)
+	bf.WriteString("`)")
+	s.Table.ForceIndex = bf.String()
 	return s
 }
 
@@ -149,9 +176,16 @@ func (s *SqlBuilder) Limit(limit int) *SqlBuilder {
 	return s
 }
 
-func (s *SqlBuilder) OffSet(offset int) *SqlBuilder {
-	s.OffSetParams = offset
+// Offset 设置查询的偏移量（用于分页）
+func (s *SqlBuilder) Offset(offset int) *SqlBuilder {
+	s.OffsetParam = offset
 	return s
+}
+
+// OffSet 设置查询的偏移量（已废弃，保留用于向后兼容，请使用 Offset）
+// Deprecated: 使用 Offset 替代
+func (s *SqlBuilder) OffSet(offset int) *SqlBuilder {
+	return s.Offset(offset)
 }
 
 func (s *SqlBuilder) First() *SqlBuilder {
@@ -218,29 +252,238 @@ func (s *SqlBuilder) getInsert() string {
 	return bf.String()
 }
 
+// InsertMap 构建单行插入 SQL：INSERT INTO table (`a`,`b`) VALUES (:a,:b)
+func (s *SqlBuilder) InsertMap(data map[string]any) (string, map[string]any) {
+	if s.Table == nil || s.Table.GetName() == "" {
+		return "", nil
+	}
+	if len(data) == 0 {
+		return "", nil
+	}
+
+	cols := make([]string, 0, len(data))
+	phs := make([]string, 0, len(data))
+	params := make(map[string]any, len(data))
+	for k, v := range data {
+		cols = append(cols, ColumnNameHandler(k))
+		phs = append(phs, ":"+k)
+		params[k] = v
+	}
+	var bf bytes.Buffer
+	bf.WriteString(s.getInsert())
+	bf.WriteString(" (")
+	bf.WriteString(strings.Join(cols, ", "))
+	bf.WriteString(") VALUES (")
+	bf.WriteString(strings.Join(phs, ", "))
+	bf.WriteString(")")
+	return bf.String(), params
+}
+
+// InsertMany 构建多行插入 SQL：INSERT INTO table (`a`,`b`) VALUES (:a_0,:b_0),(:a_1,:b_1)...
+func (s *SqlBuilder) InsertMany(rows []map[string]any) (string, map[string]any) {
+	if s.Table == nil || s.Table.GetName() == "" {
+		return "", nil
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+	// 以第一行确定列顺序
+	first := rows[0]
+	if len(first) == 0 {
+		return "", nil
+	}
+	cols := make([]string, 0, len(first))
+	for k := range first {
+		cols = append(cols, k)
+	}
+	// 稳定列顺序（按名称排序）
+	sort.Strings(cols)
+	quotedCols := make([]string, len(cols))
+	for i, c := range cols {
+		quotedCols[i] = ColumnNameHandler(c)
+	}
+
+	params := make(map[string]any, len(rows)*len(cols))
+	valuesTuples := make([]string, 0, len(rows))
+	for i, row := range rows {
+		placeholders := make([]string, 0, len(cols))
+		for _, c := range cols {
+			key := c + "_" + strconv.Itoa(i)
+			placeholders = append(placeholders, ":"+key)
+			if v, ok := row[c]; ok {
+				params[key] = v
+			} else {
+				params[key] = nil
+			}
+		}
+		valuesTuples = append(valuesTuples, "("+strings.Join(placeholders, ", ")+")")
+	}
+
+	var bf bytes.Buffer
+	bf.WriteString(s.getInsert())
+	bf.WriteString(" (")
+	bf.WriteString(strings.Join(quotedCols, ", "))
+	bf.WriteString(") VALUES ")
+	bf.WriteString(strings.Join(valuesTuples, ", "))
+	return bf.String(), params
+}
+
+// UpdateMap 构建更新 SQL：UPDATE <table [JOIN ...]> SET `a`=:a,`b`=:b WHERE ...
+func (s *SqlBuilder) UpdateMap(set map[string]any) (string, map[string]any) {
+	if s.Table == nil || s.Table.GetName() == "" {
+		return "", nil
+	}
+	if len(set) == 0 {
+		return "", nil
+	}
+	// 表与 Join
+	tbl, tblParams := s.getTable()
+	// SET 子句
+	setParts := make([]string, 0, len(set))
+	params := make(map[string]any, len(set))
+	for k, v := range set {
+		setParts = append(setParts, ColumnNameHandler(k)+" = :"+k)
+		params[k] = v
+	}
+	// WHERE 子句
+	whereStr, whereParams := s.getWhere()
+	for k, v := range tblParams {
+		params[k] = v
+	}
+	for k, v := range whereParams {
+		params[k] = v
+	}
+
+	var bf bytes.Buffer
+	bf.WriteString("UPDATE ")
+	bf.WriteString(tbl)
+	bf.WriteString(" SET ")
+	bf.WriteString(strings.Join(setParts, ", "))
+	bf.WriteString(whereStr)
+	return bf.String(), params
+}
+
+// UpdateOrdered 构建更新 SQL（按顺序设置 SET 列）
+// 例如：[]map[string]any{{"name":"a"},{"age":2}} 会按给定顺序生成 SET 子句
+func (s *SqlBuilder) UpdateOrdered(orderedSet []map[string]any) (string, map[string]any) {
+    if s.Table == nil || s.Table.GetName() == "" {
+        return "", nil
+    }
+    if len(orderedSet) == 0 {
+        return "", nil
+    }
+    // 表与 Join
+    tbl, tblParams := s.getTable()
+    // SET 子句（保持顺序）
+    setParts := make([]string, 0, len(orderedSet))
+    params := make(map[string]any, len(orderedSet))
+    for _, item := range orderedSet {
+        for k, v := range item {
+            setParts = append(setParts, ColumnNameHandler(k)+" = :"+k)
+            params[k] = v
+        }
+    }
+    // WHERE 子句
+    whereStr, whereParams := s.getWhere()
+    for k, v := range tblParams {
+        params[k] = v
+    }
+    for k, v := range whereParams {
+        params[k] = v
+    }
+
+    var bf bytes.Buffer
+    bf.WriteString("UPDATE ")
+    bf.WriteString(tbl)
+    bf.WriteString(" SET ")
+    bf.WriteString(strings.Join(setParts, ", "))
+    bf.WriteString(whereStr)
+    return bf.String(), params
+}
+
+// InsertOnDuplicateCols 构建 Upsert：指定插入列及冲突时用 VALUES(col) 更新的列
+// INSERT INTO t (...) VALUES (...) ON DUPLICATE KEY UPDATE col=VALUES(col), ...
+func (s *SqlBuilder) InsertOnDuplicateCols(set map[string]any, updateCols []string) (string, map[string]any) {
+    if s.Table == nil || s.Table.GetName() == "" {
+        return "", nil
+    }
+    if len(set) == 0 || len(updateCols) == 0 {
+        return "", nil
+    }
+    // 基础 insert
+    cols := make([]string, 0, len(set))
+    phs := make([]string, 0, len(set))
+    params := make(map[string]any, len(set))
+    for k, v := range set {
+        cols = append(cols, ColumnNameHandler(k))
+        phs = append(phs, ":"+k)
+        params[k] = v
+    }
+    var bf bytes.Buffer
+    bf.WriteString(s.getInsert())
+    bf.WriteString(" (")
+    bf.WriteString(strings.Join(cols, ", "))
+    bf.WriteString(") VALUES (")
+    bf.WriteString(strings.Join(phs, ", "))
+    bf.WriteString(") ON DUPLICATE KEY UPDATE ")
+
+    upd := make([]string, 0, len(updateCols))
+    for _, c := range updateCols {
+        upd = append(upd, ColumnNameHandler(c)+"=VALUES("+ColumnNameHandler(c)+")")
+    }
+    bf.WriteString(strings.Join(upd, ", "))
+    return bf.String(), params
+}
+
+// InsertOnDuplicateMap 构建 Upsert：指定插入列及冲突时按 map 指定值更新
+// INSERT INTO t (...) VALUES (...) ON DUPLICATE KEY UPDATE col=:col_upd, ...
+func (s *SqlBuilder) InsertOnDuplicateMap(set map[string]any, update map[string]any) (string, map[string]any) {
+    if s.Table == nil || s.Table.GetName() == "" {
+        return "", nil
+    }
+    if len(set) == 0 || len(update) == 0 {
+        return "", nil
+    }
+    // 基础 insert
+    cols := make([]string, 0, len(set))
+    phs := make([]string, 0, len(set))
+    params := make(map[string]any, len(set)+len(update))
+    for k, v := range set {
+        cols = append(cols, ColumnNameHandler(k))
+        phs = append(phs, ":"+k)
+        params[k] = v
+    }
+    var bf bytes.Buffer
+    bf.WriteString(s.getInsert())
+    bf.WriteString(" (")
+    bf.WriteString(strings.Join(cols, ", "))
+    bf.WriteString(") VALUES (")
+    bf.WriteString(strings.Join(phs, ", "))
+    bf.WriteString(") ON DUPLICATE KEY UPDATE ")
+
+    upd := make([]string, 0, len(update))
+    for k, v := range update {
+        key := k + "_upd"
+        upd = append(upd, ColumnNameHandler(k)+" = :"+key)
+        params[key] = v
+    }
+    bf.WriteString(strings.Join(upd, ", "))
+    return bf.String(), params
+}
+
 // noDefault 不要默认的格式
 func (s *SqlBuilder) getSelect(noDefault bool) (string, map[string]any) {
-	bf := bytes.Buffer{}
 	var value = map[string]any{}
-	//if !noDefault {
-	//	bf.WriteString("select ")
-	//}
 
 	if len(s.FieldParam) > 0 {
-		bf.WriteString("select ")
-		for _, field := range s.FieldParam {
-			bf.WriteString(field)
-			bf.WriteString(", ")
-		}
-		bf.Truncate(bf.Len() - 2)
-	} else {
-		if !noDefault {
-			bf.WriteString("select ")
-
-			bf.WriteString(" * ")
-		}
+		// 使用 strings.Join 代替循环+Truncate，性能更好
+		return "SELECT " + strings.Join(s.FieldParam, ", "), value
 	}
-	return bf.String(), value
+
+	if !noDefault {
+		return "SELECT *", value
+	}
+	return "", value
 }
 
 func (s *SqlBuilder) getTable() (string, map[string]any) {
@@ -249,8 +492,24 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 	//}
 	var value map[string]any = map[string]any{}
 
-	bf := bytes.Buffer{}
-	bf.WriteString(s.Table.GetName())
+    bf := bytes.Buffer{}
+    // 优先使用子查询作为 FROM 来源
+    if s.FromSubQuery != nil {
+        tb, paramsData := s.FromSubQuery.subQuery()
+        bf.WriteString("(")
+        bf.WriteString(tb)
+        bf.WriteString(") ")
+        if s.label != "" {
+            bf.WriteString(s.label)
+        }
+        if paramsData != nil {
+            for k, v := range paramsData {
+                value[k] = v
+            }
+        }
+    } else {
+        bf.WriteString(s.Table.GetName())
+    }
 
 	if s.Table.Label != "" {
 		bf.WriteString(" AS ")
@@ -316,48 +575,55 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 
 func (s *SqlBuilder) getWhere() (string, map[string]any) {
 	var value map[string]any = map[string]any{}
-	bf := bytes.Buffer{}
-	if s.WhereParam != nil && len(s.WhereParam) > 0 {
-		bf.WriteString(" where ")
-		for _, v := range s.WhereParam {
-			bf.WriteString(v.String())
-			bf.WriteString(" and ")
+	if len(s.WhereParam) == 0 {
+		return "", value
+	}
 
-			if vau := v.Values(); vau != nil {
-				for k, vi := range *vau {
-					value[k] = vi
-				}
+	bf := bytes.Buffer{}
+	bf.WriteString(" WHERE ")
+	for _, v := range s.WhereParam {
+		if vau := v.Values(); vau != nil {
+			for k, vi := range *vau {
+				value[k] = vi
 			}
 		}
-		bf.Truncate(bf.Len() - 4)
+		bf.WriteString(v.String())
+		bf.WriteString(" AND ")
+	}
+	// 移除最后一个 " AND "
+	if bf.Len() > 6 {
+		bf.Truncate(bf.Len() - 5)
 	}
 	return bf.String(), value
 }
 
 func (s *SqlBuilder) getGroupBy() (string, map[string]any) {
-	bf := bytes.Buffer{}
 	value := map[string]any{}
+	if len(s.GroupParam) == 0 {
+		return "", value
+	}
 
-	if s.GroupParam != nil && len(s.GroupParam) > 0 {
-		bf.WriteString(" GROUP BY ")
-		for _, g := range s.GroupParam {
-			bf.WriteString(g.String())
-			bf.WriteString(",")
-			if vl := g.Values(); vl != nil {
-				for k, vi := range *vl {
-					value[k] = vi
-				}
+	// 先收集参数和字段字符串
+	parts := make([]string, 0, len(s.GroupParam))
+	for _, g := range s.GroupParam {
+		if vl := g.Values(); vl != nil {
+			for k, vi := range *vl {
+				value[k] = vi
 			}
 		}
-		bf.Truncate(bf.Len() - 1)
+		parts = append(parts, g.String())
+	}
 
-		if s.HavingParam != nil {
-			bf.WriteString(" HAVING ")
-			bf.WriteString(s.HavingParam.String())
-			if hvl := s.HavingParam.Values(); hvl != nil {
-				for k, vi := range *hvl {
-					value[k] = vi
-				}
+	var bf bytes.Buffer
+	bf.WriteString(" GROUP BY ")
+	bf.WriteString(strings.Join(parts, ", "))
+
+	if s.HavingParam != nil {
+		bf.WriteString(" HAVING ")
+		bf.WriteString(s.HavingParam.String())
+		if hvl := s.HavingParam.Values(); hvl != nil {
+			for k, vi := range *hvl {
+				value[k] = vi
 			}
 		}
 	}
@@ -366,29 +632,35 @@ func (s *SqlBuilder) getGroupBy() (string, map[string]any) {
 }
 
 func (s *SqlBuilder) getOrderBy() string {
-	if s.OrderParam != nil && len(s.OrderParam) > 0 {
-		bf := bytes.Buffer{}
-		bf.WriteString(" order by ")
-		for _, op := range s.OrderParam {
-			bf.WriteString(op.String())
-			bf.WriteString(", ")
-		}
-		bf.Truncate(bf.Len() - 2)
-		return bf.String()
+	if len(s.OrderParam) == 0 {
+		return ""
 	}
-	return ""
+
+	// 预分配切片，使用 strings.Join 提高性能
+	parts := make([]string, 0, len(s.OrderParam))
+	for _, op := range s.OrderParam {
+		parts = append(parts, op.String())
+	}
+	return " ORDER BY " + strings.Join(parts, ", ")
 }
 
 func (s *SqlBuilder) getLimit() string {
-	if s.OffSetParams == 0 {
+	if s.OffsetParam == 0 {
 		if s.LimitParam > 0 {
-			return fmt.Sprintf(" limit %d", s.LimitParam)
-		} else {
-			return ""
+			var bf bytes.Buffer
+			bf.WriteString(" LIMIT ")
+			bf.WriteString(strconv.Itoa(s.LimitParam))
+			return bf.String()
 		}
-	} else {
-		return fmt.Sprintf(" limit %d, %d", s.LimitParam, s.OffSetParams)
+		return ""
 	}
+	// MySQL LIMIT 语法: LIMIT offset, limit
+	var bf bytes.Buffer
+	bf.WriteString(" LIMIT ")
+	bf.WriteString(strconv.Itoa(s.OffsetParam))
+	bf.WriteString(", ")
+	bf.WriteString(strconv.Itoa(s.LimitParam))
+	return bf.String()
 }
 
 func (s *SqlBuilder) subQuery() (string, map[string]any) {
@@ -405,29 +677,32 @@ func (s *SqlBuilder) subQuery() (string, map[string]any) {
 }
 
 func (s *SqlBuilder) commonQuery(bf bytes.Buffer, value map[string]any) (string, map[string]any) {
-
 	if bf.Len() > 0 {
 		bf.WriteString(" FROM ")
 	}
+
+	// 收集所有需要合并的 map，减少多次遍历
+	var mapsToMerge []map[string]any
+
 	// table
 	sl, data := s.getTable()
 	bf.WriteString(sl)
-	for k, v := range data {
-		value[k] = v
+	if len(data) > 0 {
+		mapsToMerge = append(mapsToMerge, data)
 	}
 
 	// where
 	sl, data = s.getWhere()
 	bf.WriteString(sl)
-	for k, v := range data {
-		value[k] = v
+	if len(data) > 0 {
+		mapsToMerge = append(mapsToMerge, data)
 	}
 
 	// group
 	sl, data = s.getGroupBy()
 	bf.WriteString(sl)
-	for k, v := range data {
-		value[k] = v
+	if len(data) > 0 {
+		mapsToMerge = append(mapsToMerge, data)
 	}
 
 	// order
@@ -435,6 +710,26 @@ func (s *SqlBuilder) commonQuery(bf bytes.Buffer, value map[string]any) (string,
 
 	// limit
 	bf.WriteString(s.getLimit())
+
+	// 一次性合并所有 map，减少遍历次数
+	if len(mapsToMerge) > 0 {
+		// 计算总容量
+		totalSize := len(value) // value 已有容量
+		for _, m := range mapsToMerge {
+			totalSize += len(m)
+		}
+		// 如果 value 为 nil，初始化；否则确保有足够容量
+		if value == nil {
+			value = make(map[string]any, totalSize)
+		}
+		// 合并所有 map
+		for _, m := range mapsToMerge {
+			for k, v := range m {
+				value[k] = v
+			}
+		}
+	}
+
 	return bf.String(), value
 }
 
@@ -450,15 +745,14 @@ func (s *SqlBuilder) Query() (string, map[string]any) {
 	return s.commonQuery(bf, value)
 }
 
-// 删除数据
-// t 要删除的表
+// Delete 构建 DELETE 查询语句
+// t 可选参数，指定要删除的表（用于多表 JOIN 删除的场景）
+// 示例:
+//   - Delete() -> DELETE FROM table WHERE ...
+//   - Delete(&table) -> DELETE table_alias FROM table WHERE ...
 func (s *SqlBuilder) Delete(t ...*SqlBuilder) (string, map[string]any) {
-	// delete t_user from t_user left join t_user_info on t_user.id=t_user_info.user_id where t_user.id =1
-	// delete u from t_user u left join t_user_info ti  on u.id=ti.user_id where u.id =1
-	// delete from t_user where id = 0
 	var value = map[string]any{}
 	bf := bytes.Buffer{}
-	// select
 	sl := s.getDelete(t...)
 	bf.WriteString(sl)
 	return s.commonQuery(bf, value)
