@@ -1,4 +1,4 @@
-package mdb
+package db
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
-	"github.com/preceeder/go.db.mdb/builder"
+	"github.com/preceeder/db/builder"
 	"log/slog"
 	"strings"
 )

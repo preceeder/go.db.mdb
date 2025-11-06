@@ -1,10 +1,10 @@
-package mdb
+package db
 
 import (
 	"context"
 	"errors"
 	"github.com/jmoiron/sqlx"
-	"github.com/preceeder/go.db.mdb/builder"
+	"github.com/preceeder/db/builder"
 	"os"
 	"testing"
 )

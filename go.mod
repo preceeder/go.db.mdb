@@ -1,4 +1,4 @@
-module github.com/preceeder/go.db.mdb
+module github.com/preceeder/db
 
 go 1.24.2
 
