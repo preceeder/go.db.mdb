@@ -1,12 +1,12 @@
 package mdb
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
-	"github.com/preceeder/go.base"
 	"github.com/preceeder/go.db.mdb/builder"
 	"log/slog"
 	"strings"
@@ -22,7 +22,7 @@ type MysqlConfig struct {
 	Port        string `json:"port" yaml:"port"`
 	Password    string `json:"password" yaml:"password"`
 	User        string `json:"user" yaml:"user"`
-	Db          string `json:"database" yaml:"database"`
+	Database    string `json:"database" yaml:"database"`
 	MaxOpenCons int    `json:"maxOpenCons" yaml:"maxOpenCons"`
 	MaxIdleCons int    `json:"maxIdleCons" yaml:"maxIdleCons"`
 	Params      string `json:"params" json:"params"` // 其他配置数据, 放在链接后面的参数重
@@ -41,7 +41,7 @@ func NewMysqlClient(config MysqlConfig) *MysqlClient {
 func initMySQL(config MysqlConfig) *sqlx.DB {
 
 	//dsn := "root:password@tcp(127.0.0.1:3306)/database"
-	dsn := fmt.Sprintf("%v:%v@tcp(%v:%v)/%v", config.User, config.Password, config.Host, config.Port, config.Db)
+	dsn := fmt.Sprintf("%v:%v@tcp(%v:%v)/%v", config.User, config.Password, config.Host, config.Port, config.Database)
 	if config.Params != "" {
 		dsn = strings.Join([]string{dsn, config.Params}, "?")
 	}
@@ -64,7 +64,7 @@ func (s MysqlClient) MysqlPoolClose() {
 
 // 参数解析（安全版本）
 // 返回 error，避免 panic，便于调用方控制错误处理
-func (s MysqlClient) sqlParseSafe(ctx base.BaseContext, osql string, params map[string]any) (string, []any, error) {
+func (s MysqlClient) sqlParseSafe(ctx context.Context, osql string, params map[string]any) (string, []any, error) {
 	q, args, err := sqlx.Named(osql, params)
 	if err != nil {
 		slog.ErrorContext(ctx, "sqlx.Named", "error", err.Error())
@@ -82,52 +82,51 @@ func (s MysqlClient) sqlParseSafe(ctx base.BaseContext, osql string, params map[
 // -------------------- Builder 集成 --------------------
 
 // QueryByBuilder 执行由 builder 生成的单行查询
-func (s MysqlClient) QueryByBuilder(ctx base.BaseContext, b *builder.SqlBuilder, dest any, tx ...*sqlx.Tx) bool {
+func (s MysqlClient) QueryByBuilder(ctx context.Context, b *builder.SqlBuilder, dest any, tx ...*sqlx.Tx) error {
 	sqlStr, params := b.Query()
 	q, args, err := s.sqlParseSafe(ctx, sqlStr, params)
 	if err != nil {
-		return false
+		return err
 	}
-    if len(tx) > 0 && tx[0] != nil {
-        err = tx[0].Get(dest, q, args...)
-    } else {
-        err = s.Db.Get(dest, q, args...)
-    }
+	if len(tx) > 0 && tx[0] != nil {
+		err = tx[0].Get(dest, q, args...)
+	} else {
+		err = s.Db.Get(dest, q, args...)
+	}
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return false
+		return err
 	case err != nil:
 		slog.ErrorContext(ctx, "mdb QueryByBuilder failed", "error", err, "sql", sqlStr, "data", params)
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
 // FetchByBuilder 执行由 builder 生成的多行查询
-func (s MysqlClient) FetchByBuilder(ctx base.BaseContext, b *builder.SqlBuilder, dest any, tx ...*sqlx.Tx) bool {
+func (s MysqlClient) FetchByBuilder(ctx context.Context, b *builder.SqlBuilder, dest any, tx ...*sqlx.Tx) error {
 	sqlStr, params := b.Query()
 	q, args, err := s.sqlParseSafe(ctx, sqlStr, params)
 	if err != nil {
-		return false
+		return err
 	}
-    if len(tx) > 0 && tx[0] != nil {
-        if err = tx[0].Select(dest, q, args...); err != nil {
-            slog.ErrorContext(ctx, "mdb FetchByBuilder failed", "error", err, "sql", sqlStr, "data", params)
-            return false
-        }
-    } else if err = sqlx.Select(s.Db, dest, q, args...); err != nil {
+	if len(tx) > 0 && tx[0] != nil {
+		if err = tx[0].Select(dest, q, args...); err != nil {
+			slog.ErrorContext(ctx, "mdb FetchByBuilder failed", "error", err, "sql", sqlStr, "data", params)
+			return err
+		}
+	} else if err = sqlx.Select(s.Db, dest, q, args...); err != nil {
 		slog.ErrorContext(ctx, "mdb FetchByBuilder failed", "error", err, "sql", sqlStr, "data", params)
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
 // ExecByBuilder 执行由 builder 生成的 DML 语句（Insert/Update/Delete）
-func (s MysqlClient) ExecByBuilder(ctx base.BaseContext, sqlStr string, params map[string]any, tx ...*sqlx.Tx) sql.Result {
+func (s MysqlClient) ExecByBuilder(ctx context.Context, sqlStr string, params map[string]any, tx ...*sqlx.Tx) (sql.Result, error) {
 	q, args, err := s.sqlParseSafe(ctx, sqlStr, params)
 	if err != nil {
-		(ctx).SetError(err)
-		return nil
+		return nil, err
 	}
 	var rs sql.Result
 	if len(tx) > 0 && tx[0] != nil {
@@ -137,18 +136,16 @@ func (s MysqlClient) ExecByBuilder(ctx base.BaseContext, sqlStr string, params m
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "mdb ExecByBuilder failed", "error", err, "sql", q, "data", params)
-		(ctx).SetError(err)
-		return nil
+		return nil, err
 	}
-	return rs
+	return rs, nil
 }
 
 // map[string]any{"tableName": "t_user",  "Set":map[string]any{"nick": "nihao"}, "Where":map[string]any{"userId": "1111"}}
 // 下面你的跟新方法 可以按照户指定顺序更新字段,  有些时候需要指定更新顺序的 就用下买你的方法传入参数
 // map[string]any{"tableName": "t_user",  "Set":[]map[string]any{{"nick": "nihao"}, {"name": []string{"if(s=0, 1, 0)"}}}, "Where":map[string]any{"userId": "1111"}}
 
-func (s MysqlClient) Transaction(ctx base.BaseContext, queryObj func(base.BaseContext, MysqlClient, *sqlx.Tx)) (err error) {
-
+func (s MysqlClient) Transaction(ctx context.Context, queryObj func(context.Context, MysqlClient, *sqlx.Tx) error) (err error) {
 	beginx, err := s.Db.Beginx()
 
 	if err != nil {
@@ -162,12 +159,6 @@ func (s MysqlClient) Transaction(ctx base.BaseContext, queryObj func(base.BaseCo
 			if err != nil {
 				return
 			}
-		} else if (ctx).GetError() != nil {
-			err = beginx.Rollback()
-			slog.ErrorContext(ctx, "事务回滚", "error", err)
-			if err != nil {
-				return
-			}
 		} else {
 			err = beginx.Commit()
 			if err != nil {
@@ -176,6 +167,13 @@ func (s MysqlClient) Transaction(ctx base.BaseContext, queryObj func(base.BaseCo
 			}
 		}
 	}()
-	queryObj(ctx, s, beginx)
+	if er := queryObj(ctx, s, beginx); er != nil {
+		err = beginx.Rollback()
+		slog.ErrorContext(ctx, "事务回滚", "error", er)
+		if er != nil {
+			return
+		}
+
+	}
 	return
 }
