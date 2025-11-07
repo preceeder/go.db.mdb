@@ -83,7 +83,7 @@ func (s MysqlClient) sqlParseSafe(ctx context.Context, osql string, params map[s
 
 // QueryByBuilder 执行由 builder 生成的单行查询
 func (s MysqlClient) QueryByBuilder(ctx context.Context, b *builder.SqlBuilder, dest any, tx ...*sqlx.Tx) error {
-	sqlStr, params := b.Query()
+	sqlStr, params := b.Sql()
 	q, args, err := s.sqlParseSafe(ctx, sqlStr, params)
 	if err != nil {
 		return err
@@ -91,11 +91,11 @@ func (s MysqlClient) QueryByBuilder(ctx context.Context, b *builder.SqlBuilder, 
 	if len(tx) > 0 && tx[0] != nil {
 		err = tx[0].Get(dest, q, args...)
 	} else {
-		err = s.Db.Get(dest, q, args...)
+		err = sqlx.Get(s.Db, dest, q, args...)
 	}
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return err
+		return nil
 	case err != nil:
 		slog.ErrorContext(ctx, "mdb QueryByBuilder failed", "error", err, "sql", sqlStr, "data", params)
 		return err
@@ -105,7 +105,7 @@ func (s MysqlClient) QueryByBuilder(ctx context.Context, b *builder.SqlBuilder, 
 
 // FetchByBuilder 执行由 builder 生成的多行查询
 func (s MysqlClient) FetchByBuilder(ctx context.Context, b *builder.SqlBuilder, dest any, tx ...*sqlx.Tx) error {
-	sqlStr, params := b.Query()
+	sqlStr, params := b.Sql()
 	q, args, err := s.sqlParseSafe(ctx, sqlStr, params)
 	if err != nil {
 		return err
@@ -123,7 +123,9 @@ func (s MysqlClient) FetchByBuilder(ctx context.Context, b *builder.SqlBuilder, 
 }
 
 // ExecByBuilder 执行由 builder 生成的 DML 语句（Insert/Update/Delete）
-func (s MysqlClient) ExecByBuilder(ctx context.Context, sqlStr string, params map[string]any, tx ...*sqlx.Tx) (sql.Result, error) {
+// 参数与 FetchByBuilder 保持一致，接受 *builder.SqlBuilder
+func (s MysqlClient) ExecByBuilder(ctx context.Context, b *builder.SqlBuilder, tx ...*sqlx.Tx) (sql.Result, error) {
+	sqlStr, params := b.Sql()
 	q, args, err := s.sqlParseSafe(ctx, sqlStr, params)
 	if err != nil {
 		return nil, err

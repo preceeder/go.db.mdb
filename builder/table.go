@@ -62,6 +62,11 @@ type SqlBuilder struct {
 
     // FromSubQuery 表示该查询的 FROM 来源是一个子查询
     FromSubQuery *SqlBuilder
+
+	// DML 操作相关字段
+	dmlType string      // DML 操作类型: "insert", "insert_many", "update", "update_ordered", "insert_on_duplicate_cols", "insert_on_duplicate_map", "delete"
+	dmlData interface{} // DML 操作数据
+	deleteTarget *SqlBuilder // Delete 操作的删除目标表（可选）
 }
 
 // As 设置表的别名
@@ -80,7 +85,7 @@ func (s *SqlBuilder) Label(label string) *SqlBuilder {
 // FromSub 将另一个构建器作为当前查询的 FROM 子查询来源
 // 示例：
 //   sub := Table("t").Select(...).Group(...).Label("sub")
-//   q := Table("").FromSub(sub).Select(q.Field("col")).Query()
+//   q := Table("").FromSub(sub).Select(q.Field("col")).Sql()
 func (s *SqlBuilder) FromSub(sub *SqlBuilder) *SqlBuilder {
     s.FromSubQuery = sub
     if sub != nil && sub.label != "" {
@@ -229,17 +234,17 @@ func (s *SqlBuilder) Union(table *SqlBuilder, unionType ...string) *SqlBuilder {
 	return s
 }
 
-func (s *SqlBuilder) getDelete(t ...*SqlBuilder) string {
+func (s *SqlBuilder) getDelete(t *SqlBuilder) string {
 	bf := bytes.Buffer{}
 	bf.WriteString("DELETE ")
 
-	if len(t) > 0 {
-		if t[0].label != "" {
-			bf.WriteString(t[0].label)
-		} else if t[0].Table.Label != "" {
-			bf.WriteString(t[0].Table.Label)
+	if t != nil {
+		if t.label != "" {
+			bf.WriteString(t.label)
+		} else if t.Table.Label != "" {
+			bf.WriteString(t.Table.Label)
 		} else {
-			bf.WriteString(t[0].Table.GetName())
+			bf.WriteString(t.Table.GetName())
 		}
 	}
 	return bf.String()
@@ -252,23 +257,36 @@ func (s *SqlBuilder) getInsert() string {
 	return bf.String()
 }
 
-// InsertMap 构建单行插入 SQL：INSERT INTO table (`a`,`b`) VALUES (:a,:b)
-func (s *SqlBuilder) InsertMap(data map[string]any) (string, map[string]any) {
+// InsertMap 设置单行插入操作，返回 *SqlBuilder 以支持链式调用
+// 使用: sql, params := builder.Table("user").InsertMap(data).Sql()
+func (s *SqlBuilder) InsertMap(data map[string]any) *SqlBuilder {
+	s.dmlType = "insert"
+	s.dmlData = data
+	return s
+}
+
+// buildInsertMap 构建单行插入 SQL：INSERT INTO table (`a`,`b`) VALUES (:a,:b)
+func (s *SqlBuilder) buildInsertMap() (string, map[string]any) {
 	if s.Table == nil || s.Table.GetName() == "" {
 		return "", nil
 	}
-	if len(data) == 0 {
+	data, ok := s.dmlData.(map[string]any)
+	if !ok || len(data) == 0 {
 		return "", nil
 	}
 
 	cols := make([]string, 0, len(data))
 	phs := make([]string, 0, len(data))
-	params := make(map[string]any, len(data))
+	insertParams := make(map[string]any, len(data))
 	for k, v := range data {
 		cols = append(cols, ColumnNameHandler(k))
 		phs = append(phs, ":"+k)
-		params[k] = v
+		insertParams[k] = v
 	}
+	
+	// 使用统一的参数合并方法
+	params := mergeParams(insertParams)
+	
 	var bf bytes.Buffer
 	bf.WriteString(s.getInsert())
 	bf.WriteString(" (")
@@ -279,12 +297,21 @@ func (s *SqlBuilder) InsertMap(data map[string]any) (string, map[string]any) {
 	return bf.String(), params
 }
 
-// InsertMany 构建多行插入 SQL：INSERT INTO table (`a`,`b`) VALUES (:a_0,:b_0),(:a_1,:b_1)...
-func (s *SqlBuilder) InsertMany(rows []map[string]any) (string, map[string]any) {
+// InsertMany 设置多行插入操作，返回 *SqlBuilder 以支持链式调用
+// 使用: sql, params := builder.Table("user").InsertMany(rows).Sql()
+func (s *SqlBuilder) InsertMany(rows []map[string]any) *SqlBuilder {
+	s.dmlType = "insert_many"
+	s.dmlData = rows
+	return s
+}
+
+// buildInsertMany 构建多行插入 SQL：INSERT INTO table (`a`,`b`) VALUES (:a_0,:b_0),(:a_1,:b_1)...
+func (s *SqlBuilder) buildInsertMany() (string, map[string]any) {
 	if s.Table == nil || s.Table.GetName() == "" {
 		return "", nil
 	}
-	if len(rows) == 0 {
+	rows, ok := s.dmlData.([]map[string]any)
+	if !ok || len(rows) == 0 {
 		return "", nil
 	}
 	// 以第一行确定列顺序
@@ -303,7 +330,7 @@ func (s *SqlBuilder) InsertMany(rows []map[string]any) (string, map[string]any) 
 		quotedCols[i] = ColumnNameHandler(c)
 	}
 
-	params := make(map[string]any, len(rows)*len(cols))
+	insertParams := make(map[string]any, len(rows)*len(cols))
 	valuesTuples := make([]string, 0, len(rows))
 	for i, row := range rows {
 		placeholders := make([]string, 0, len(cols))
@@ -311,13 +338,16 @@ func (s *SqlBuilder) InsertMany(rows []map[string]any) (string, map[string]any) 
 			key := c + "_" + strconv.Itoa(i)
 			placeholders = append(placeholders, ":"+key)
 			if v, ok := row[c]; ok {
-				params[key] = v
+				insertParams[key] = v
 			} else {
-				params[key] = nil
+				insertParams[key] = nil
 			}
 		}
 		valuesTuples = append(valuesTuples, "("+strings.Join(placeholders, ", ")+")")
 	}
+
+	// 使用统一的参数合并方法
+	params := mergeParams(insertParams)
 
 	var bf bytes.Buffer
 	bf.WriteString(s.getInsert())
@@ -328,31 +358,37 @@ func (s *SqlBuilder) InsertMany(rows []map[string]any) (string, map[string]any) 
 	return bf.String(), params
 }
 
-// UpdateMap 构建更新 SQL：UPDATE <table [JOIN ...]> SET `a`=:a,`b`=:b WHERE ...
-func (s *SqlBuilder) UpdateMap(set map[string]any) (string, map[string]any) {
+// UpdateMap 设置更新操作，返回 *SqlBuilder 以支持链式调用
+// 使用: sql, params := builder.Table("user").Where(...).UpdateMap(data).Sql()
+func (s *SqlBuilder) UpdateMap(set map[string]any) *SqlBuilder {
+	s.dmlType = "update"
+	s.dmlData = set
+	return s
+}
+
+// buildUpdateMap 构建更新 SQL：UPDATE <table [JOIN ...]> SET `a`=:a,`b`=:b WHERE ...
+func (s *SqlBuilder) buildUpdateMap() (string, map[string]any) {
 	if s.Table == nil || s.Table.GetName() == "" {
 		return "", nil
 	}
-	if len(set) == 0 {
+	set, ok := s.dmlData.(map[string]any)
+	if !ok || len(set) == 0 {
 		return "", nil
 	}
 	// 表与 Join
 	tbl, tblParams := s.getTable()
 	// SET 子句
 	setParts := make([]string, 0, len(set))
-	params := make(map[string]any, len(set))
+	setParams := make(map[string]any, len(set))
 	for k, v := range set {
 		setParts = append(setParts, ColumnNameHandler(k)+" = :"+k)
-		params[k] = v
+		setParams[k] = v
 	}
 	// WHERE 子句
 	whereStr, whereParams := s.getWhere()
-	for k, v := range tblParams {
-		params[k] = v
-	}
-	for k, v := range whereParams {
-		params[k] = v
-	}
+	
+	// 使用统一的参数合并方法
+	params := mergeParams(setParams, tblParams, whereParams)
 
 	var bf bytes.Buffer
 	bf.WriteString("UPDATE ")
@@ -363,112 +399,164 @@ func (s *SqlBuilder) UpdateMap(set map[string]any) (string, map[string]any) {
 	return bf.String(), params
 }
 
-// UpdateOrdered 构建更新 SQL（按顺序设置 SET 列）
+// UpdateOrdered 设置更新操作（按顺序设置 SET 列），返回 *SqlBuilder 以支持链式调用
 // 例如：[]map[string]any{{"name":"a"},{"age":2}} 会按给定顺序生成 SET 子句
-func (s *SqlBuilder) UpdateOrdered(orderedSet []map[string]any) (string, map[string]any) {
-    if s.Table == nil || s.Table.GetName() == "" {
-        return "", nil
-    }
-    if len(orderedSet) == 0 {
-        return "", nil
-    }
-    // 表与 Join
-    tbl, tblParams := s.getTable()
-    // SET 子句（保持顺序）
-    setParts := make([]string, 0, len(orderedSet))
-    params := make(map[string]any, len(orderedSet))
-    for _, item := range orderedSet {
-        for k, v := range item {
-            setParts = append(setParts, ColumnNameHandler(k)+" = :"+k)
-            params[k] = v
-        }
-    }
-    // WHERE 子句
-    whereStr, whereParams := s.getWhere()
-    for k, v := range tblParams {
-        params[k] = v
-    }
-    for k, v := range whereParams {
-        params[k] = v
-    }
-
-    var bf bytes.Buffer
-    bf.WriteString("UPDATE ")
-    bf.WriteString(tbl)
-    bf.WriteString(" SET ")
-    bf.WriteString(strings.Join(setParts, ", "))
-    bf.WriteString(whereStr)
-    return bf.String(), params
+// 使用: sql, params := builder.Table("user").Where(...).UpdateOrdered(orderedSet).Sql()
+func (s *SqlBuilder) UpdateOrdered(orderedSet []map[string]any) *SqlBuilder {
+	s.dmlType = "update_ordered"
+	s.dmlData = orderedSet
+	return s
 }
 
-// InsertOnDuplicateCols 构建 Upsert：指定插入列及冲突时用 VALUES(col) 更新的列
-// INSERT INTO t (...) VALUES (...) ON DUPLICATE KEY UPDATE col=VALUES(col), ...
-func (s *SqlBuilder) InsertOnDuplicateCols(set map[string]any, updateCols []string) (string, map[string]any) {
-    if s.Table == nil || s.Table.GetName() == "" {
-        return "", nil
-    }
-    if len(set) == 0 || len(updateCols) == 0 {
-        return "", nil
-    }
-    // 基础 insert
-    cols := make([]string, 0, len(set))
-    phs := make([]string, 0, len(set))
-    params := make(map[string]any, len(set))
-    for k, v := range set {
-        cols = append(cols, ColumnNameHandler(k))
-        phs = append(phs, ":"+k)
-        params[k] = v
-    }
-    var bf bytes.Buffer
-    bf.WriteString(s.getInsert())
-    bf.WriteString(" (")
-    bf.WriteString(strings.Join(cols, ", "))
-    bf.WriteString(") VALUES (")
-    bf.WriteString(strings.Join(phs, ", "))
-    bf.WriteString(") ON DUPLICATE KEY UPDATE ")
+// buildUpdateOrdered 构建更新 SQL（按顺序设置 SET 列）
+func (s *SqlBuilder) buildUpdateOrdered() (string, map[string]any) {
+	if s.Table == nil || s.Table.GetName() == "" {
+		return "", nil
+	}
+	orderedSet, ok := s.dmlData.([]map[string]any)
+	if !ok || len(orderedSet) == 0 {
+		return "", nil
+	}
+	// 表与 Join
+	tbl, tblParams := s.getTable()
+	// SET 子句（保持顺序）
+	setParts := make([]string, 0, len(orderedSet))
+	setParams := make(map[string]any)
+	for _, item := range orderedSet {
+		for k, v := range item {
+			setParts = append(setParts, ColumnNameHandler(k)+" = :"+k)
+			setParams[k] = v
+		}
+	}
+	// WHERE 子句
+	whereStr, whereParams := s.getWhere()
+	
+	// 使用统一的参数合并方法
+	params := mergeParams(setParams, tblParams, whereParams)
 
-    upd := make([]string, 0, len(updateCols))
-    for _, c := range updateCols {
-        upd = append(upd, ColumnNameHandler(c)+"=VALUES("+ColumnNameHandler(c)+")")
-    }
-    bf.WriteString(strings.Join(upd, ", "))
-    return bf.String(), params
+	var bf bytes.Buffer
+	bf.WriteString("UPDATE ")
+	bf.WriteString(tbl)
+	bf.WriteString(" SET ")
+	bf.WriteString(strings.Join(setParts, ", "))
+	bf.WriteString(whereStr)
+	return bf.String(), params
 }
 
-// InsertOnDuplicateMap 构建 Upsert：指定插入列及冲突时按 map 指定值更新
-// INSERT INTO t (...) VALUES (...) ON DUPLICATE KEY UPDATE col=:col_upd, ...
-func (s *SqlBuilder) InsertOnDuplicateMap(set map[string]any, update map[string]any) (string, map[string]any) {
-    if s.Table == nil || s.Table.GetName() == "" {
-        return "", nil
-    }
-    if len(set) == 0 || len(update) == 0 {
-        return "", nil
-    }
-    // 基础 insert
-    cols := make([]string, 0, len(set))
-    phs := make([]string, 0, len(set))
-    params := make(map[string]any, len(set)+len(update))
-    for k, v := range set {
-        cols = append(cols, ColumnNameHandler(k))
-        phs = append(phs, ":"+k)
-        params[k] = v
-    }
-    var bf bytes.Buffer
-    bf.WriteString(s.getInsert())
-    bf.WriteString(" (")
-    bf.WriteString(strings.Join(cols, ", "))
-    bf.WriteString(") VALUES (")
-    bf.WriteString(strings.Join(phs, ", "))
-    bf.WriteString(") ON DUPLICATE KEY UPDATE ")
+// InsertOnDuplicateColsData 存储 InsertOnDuplicateCols 的数据
+type InsertOnDuplicateColsData struct {
+	Set       map[string]any
+	UpdateCols []string
+}
 
-    upd := make([]string, 0, len(update))
-    for k, v := range update {
-        key := k + "_upd"
-        upd = append(upd, ColumnNameHandler(k)+" = :"+key)
-        params[key] = v
-    }
-    bf.WriteString(strings.Join(upd, ", "))
-    return bf.String(), params
+// InsertOnDuplicateCols 设置 Upsert 操作，返回 *SqlBuilder 以支持链式调用
+// 指定插入列及冲突时用 VALUES(col) 更新的列
+// 使用: sql, params := builder.Table("user").InsertOnDuplicateCols(set, updateCols).Sql()
+func (s *SqlBuilder) InsertOnDuplicateCols(set map[string]any, updateCols []string) *SqlBuilder {
+	s.dmlType = "insert_on_duplicate_cols"
+	s.dmlData = InsertOnDuplicateColsData{
+		Set:        set,
+		UpdateCols: updateCols,
+	}
+	return s
+}
+
+// buildInsertOnDuplicateCols 构建 Upsert SQL：指定插入列及冲突时用 VALUES(col) 更新的列
+func (s *SqlBuilder) buildInsertOnDuplicateCols() (string, map[string]any) {
+	if s.Table == nil || s.Table.GetName() == "" {
+		return "", nil
+	}
+	data, ok := s.dmlData.(InsertOnDuplicateColsData)
+	if !ok || len(data.Set) == 0 || len(data.UpdateCols) == 0 {
+		return "", nil
+	}
+	// 基础 insert
+	cols := make([]string, 0, len(data.Set))
+	phs := make([]string, 0, len(data.Set))
+	insertParams := make(map[string]any, len(data.Set))
+	for k, v := range data.Set {
+		cols = append(cols, ColumnNameHandler(k))
+		phs = append(phs, ":"+k)
+		insertParams[k] = v
+	}
+	
+	// 使用统一的参数合并方法
+	params := mergeParams(insertParams)
+	
+	var bf bytes.Buffer
+	bf.WriteString(s.getInsert())
+	bf.WriteString(" (")
+	bf.WriteString(strings.Join(cols, ", "))
+	bf.WriteString(") VALUES (")
+	bf.WriteString(strings.Join(phs, ", "))
+	bf.WriteString(") ON DUPLICATE KEY UPDATE ")
+
+	upd := make([]string, 0, len(data.UpdateCols))
+	for _, c := range data.UpdateCols {
+		upd = append(upd, ColumnNameHandler(c)+"=VALUES("+ColumnNameHandler(c)+")")
+	}
+	bf.WriteString(strings.Join(upd, ", "))
+	return bf.String(), params
+}
+
+// InsertOnDuplicateMapData 存储 InsertOnDuplicateMap 的数据
+type InsertOnDuplicateMapData struct {
+	Set    map[string]any
+	Update map[string]any
+}
+
+// InsertOnDuplicateMap 设置 Upsert 操作，返回 *SqlBuilder 以支持链式调用
+// 指定插入列及冲突时按 map 指定值更新
+// 使用: sql, params := builder.Table("user").InsertOnDuplicateMap(set, update).Sql()
+func (s *SqlBuilder) InsertOnDuplicateMap(set map[string]any, update map[string]any) *SqlBuilder {
+	s.dmlType = "insert_on_duplicate_map"
+	s.dmlData = InsertOnDuplicateMapData{
+		Set:    set,
+		Update: update,
+	}
+	return s
+}
+
+// buildInsertOnDuplicateMap 构建 Upsert SQL：指定插入列及冲突时按 map 指定值更新
+func (s *SqlBuilder) buildInsertOnDuplicateMap() (string, map[string]any) {
+	if s.Table == nil || s.Table.GetName() == "" {
+		return "", nil
+	}
+	data, ok := s.dmlData.(InsertOnDuplicateMapData)
+	if !ok || len(data.Set) == 0 || len(data.Update) == 0 {
+		return "", nil
+	}
+	// 基础 insert
+	cols := make([]string, 0, len(data.Set))
+	phs := make([]string, 0, len(data.Set))
+	insertParams := make(map[string]any, len(data.Set))
+	for k, v := range data.Set {
+		cols = append(cols, ColumnNameHandler(k))
+		phs = append(phs, ":"+k)
+		insertParams[k] = v
+	}
+	
+	// 处理 UPDATE 部分的参数
+	updateParams := make(map[string]any, len(data.Update))
+	upd := make([]string, 0, len(data.Update))
+	for k, v := range data.Update {
+		key := k + "_upd"
+		upd = append(upd, ColumnNameHandler(k)+" = :"+key)
+		updateParams[key] = v
+	}
+	
+	// 使用统一的参数合并方法
+	params := mergeParams(insertParams, updateParams)
+	
+	var bf bytes.Buffer
+	bf.WriteString(s.getInsert())
+	bf.WriteString(" (")
+	bf.WriteString(strings.Join(cols, ", "))
+	bf.WriteString(") VALUES (")
+	bf.WriteString(strings.Join(phs, ", "))
+	bf.WriteString(") ON DUPLICATE KEY UPDATE ")
+	bf.WriteString(strings.Join(upd, ", "))
+	return bf.String(), params
 }
 
 // noDefault 不要默认的格式
@@ -501,6 +589,8 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
         bf.WriteString(") ")
         if s.label != "" {
             bf.WriteString(s.label)
+        } else {
+            bf.WriteString("sub")
         }
         if paramsData != nil {
             for k, v := range paramsData {
@@ -549,11 +639,11 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 			}
 		}
 	}
-	if len(s.UnionBuilder) > 0 {
+    if len(s.UnionBuilder) > 0 {
 		endLen := 0
 		bf.WriteString("( ")
 		for _, tb := range s.UnionBuilder {
-			tbt, paramsData := tb.Table.Query()
+			tbt, paramsData := tb.Table.Sql()
 			bf.WriteString("(")
 			bf.WriteString(tbt)
 			bf.WriteString(") ")
@@ -564,10 +654,12 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 			}
 		}
 		bf.Truncate(bf.Len() - endLen)
-		bf.WriteString(" ) ")
-		if s.label != "" {
-			bf.WriteString(s.label)
-		}
+        bf.WriteString(" ) ")
+        if s.label != "" {
+            bf.WriteString(s.label)
+        } else {
+            bf.WriteString("sub")
+        }
 	}
 
 	return bf.String(), value
@@ -676,12 +768,43 @@ func (s *SqlBuilder) subQuery() (string, map[string]any) {
 	return s.commonQuery(bf, value)
 }
 
+// mergeParams 统一合并参数的方法，与 commonQuery 保持一致
+// 将多个参数 map 合并到一个 map 中，预分配容量以提高性能
+func mergeParams(baseParams map[string]any, additionalParams ...map[string]any) map[string]any {
+	// 计算总容量
+	totalSize := len(baseParams)
+	for _, m := range additionalParams {
+		totalSize += len(m)
+	}
+
+	// 如果 baseParams 为 nil，初始化；否则确保有足够容量
+	if baseParams == nil {
+		baseParams = make(map[string]any, totalSize)
+	} else if totalSize > len(baseParams) {
+		// 如果需要扩容，创建新 map 并复制现有数据
+		newParams := make(map[string]any, totalSize)
+		for k, v := range baseParams {
+			newParams[k] = v
+		}
+		baseParams = newParams
+	}
+
+	// 合并所有额外的参数
+	for _, m := range additionalParams {
+		for k, v := range m {
+			baseParams[k] = v
+		}
+	}
+
+	return baseParams
+}
+
 func (s *SqlBuilder) commonQuery(bf bytes.Buffer, value map[string]any) (string, map[string]any) {
 	if bf.Len() > 0 {
 		bf.WriteString(" FROM ")
 	}
 
-	// 收集所有需要合并的 map，减少多次遍历
+	// 收集所有需要合并的 map
 	var mapsToMerge []map[string]any
 
 	// table
@@ -711,49 +834,64 @@ func (s *SqlBuilder) commonQuery(bf bytes.Buffer, value map[string]any) (string,
 	// limit
 	bf.WriteString(s.getLimit())
 
-	// 一次性合并所有 map，减少遍历次数
-	if len(mapsToMerge) > 0 {
-		// 计算总容量
-		totalSize := len(value) // value 已有容量
-		for _, m := range mapsToMerge {
-			totalSize += len(m)
-		}
-		// 如果 value 为 nil，初始化；否则确保有足够容量
-		if value == nil {
-			value = make(map[string]any, totalSize)
-		}
-		// 合并所有 map
-		for _, m := range mapsToMerge {
-			for k, v := range m {
-				value[k] = v
-			}
-		}
-	}
+	// 使用统一的参数合并方法
+	value = mergeParams(value, mapsToMerge...)
 
 	return bf.String(), value
 }
 
-func (s *SqlBuilder) Query() (string, map[string]any) {
-	var value = map[string]any{}
-	bf := bytes.Buffer{}
-	// select
-	sl, data := s.getSelect(false)
-	bf.WriteString(sl)
-	for k, v := range data {
-		value[k] = v
+// Sql 统一获取 SQL 语句和参数
+// 支持 SELECT、INSERT、UPDATE、DELETE 等所有操作
+func (s *SqlBuilder) Sql() (string, map[string]any) {
+	// 如果有 DML 操作类型，生成对应的 SQL
+	switch s.dmlType {
+	case "insert":
+		return s.buildInsertMap()
+	case "insert_many":
+		return s.buildInsertMany()
+	case "update":
+		return s.buildUpdateMap()
+	case "update_ordered":
+		return s.buildUpdateOrdered()
+	case "insert_on_duplicate_cols":
+		return s.buildInsertOnDuplicateCols()
+	case "insert_on_duplicate_map":
+		return s.buildInsertOnDuplicateMap()
+	case "delete":
+		return s.buildDelete()
+	default:
+		// 默认是 SELECT 查询
+		var value = map[string]any{}
+		bf := bytes.Buffer{}
+		// select
+		sl, data := s.getSelect(false)
+		bf.WriteString(sl)
+		for k, v := range data {
+			value[k] = v
+		}
+		return s.commonQuery(bf, value)
 	}
-	return s.commonQuery(bf, value)
 }
 
-// Delete 构建 DELETE 查询语句
+// Delete 设置 DELETE 操作，返回 *SqlBuilder 以支持链式调用
 // t 可选参数，指定要删除的表（用于多表 JOIN 删除的场景）
 // 示例:
 //   - Delete() -> DELETE FROM table WHERE ...
 //   - Delete(&table) -> DELETE table_alias FROM table WHERE ...
-func (s *SqlBuilder) Delete(t ...*SqlBuilder) (string, map[string]any) {
+//   使用: sql, params := builder.Table("user").Where(...).Delete().Sql()
+func (s *SqlBuilder) Delete(t ...*SqlBuilder) *SqlBuilder {
+	s.dmlType = "delete"
+	if len(t) > 0 {
+		s.deleteTarget = t[0]
+	}
+	return s
+}
+
+// buildDelete 构建 DELETE 查询语句
+func (s *SqlBuilder) buildDelete() (string, map[string]any) {
 	var value = map[string]any{}
 	bf := bytes.Buffer{}
-	sl := s.getDelete(t...)
+	sl := s.getDelete(s.deleteTarget)
 	bf.WriteString(sl)
 	return s.commonQuery(bf, value)
 }

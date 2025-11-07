@@ -70,15 +70,15 @@ func TestExecByBuilder_DML(t *testing.T) {
 		_, _ = tx.Exec("CREATE TEMPORARY TABLE IF NOT EXISTS tmp_mdb_test (id BIGINT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64), age INT) ENGINE=InnoDB")
 
 		// Insert
-		insSQL, insParams := builder.Table("tmp_mdb_test").InsertMap(map[string]any{"name": "n1", "age": 18})
-		if _, err := m.ExecByBuilder(ctx, insSQL, insParams, tx); err != nil {
+		insBuilder := builder.Table("tmp_mdb_test").InsertMap(map[string]any{"name": "n1", "age": 18})
+		if _, err := m.ExecByBuilder(ctx, insBuilder, tx); err != nil {
 			t.Fatalf("insert failed")
 		}
 
 		// Update
 		tb := builder.Table("tmp_mdb_test")
-		updSQL, updParams := tb.Where(tb.Field("name").Eq("n1", "n")).UpdateMap(map[string]any{"age": 19})
-		if _, err := m.ExecByBuilder(ctx, updSQL, updParams, tx); err != nil {
+		updBuilder := tb.Where(tb.Field("name").Eq("n1", "n")).UpdateMap(map[string]any{"age": 19})
+		if _, err := m.ExecByBuilder(ctx, updBuilder, tx); err != nil {
 			t.Fatalf("update failed")
 		}
 
@@ -97,8 +97,8 @@ func TestExecByBuilder_DML(t *testing.T) {
 		_ = m.FetchByBuilder(ctx, fb, &list, tx)
 
 		// Delete
-		delSQL, delParams := tb.Where(tb.Field("age").Eq(19, "a")).Delete()
-		if _, err := m.ExecByBuilder(ctx, delSQL, delParams, tx); err != nil {
+		delBuilder := tb.Where(tb.Field("age").Eq(19, "a")).Delete()
+		if _, err := m.ExecByBuilder(ctx, delBuilder, tx); err != nil {
 			t.Fatalf("delete failed")
 		}
 

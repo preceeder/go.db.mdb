@@ -140,13 +140,13 @@ func TestSubqueryInFrom(t *testing.T) {
 			Group(NewField("age")).
 			Label("age_stats") // 设置子查询别名
 
-        // 使用 FromSub 将子查询作为 FROM 来源
-        parent := Table("").FromSub(subQuery)
-        sql, params := parent.
-            Select(parent.Field("age"), parent.Field("user_count")).
-            Where(parent.Field("user_count").Gt(10)).
-            Order(parent.Field("age").Desc()).
-            Query()
+		// 使用 FromSub 将子查询作为 FROM 来源
+		parent := Table("").FromSub(subQuery)
+		sql, params := parent.
+			Select(parent.Field("age"), parent.Field("user_count")).
+			Where(parent.Field("user_count").Gt(10)).
+			Order(parent.Field("age").Desc()).
+			Query()
 
 		fmt.Println("=== FROM 子查询测试 ===")
 		fmt.Println("SQL:", sql)
@@ -179,26 +179,26 @@ func TestSubqueryComplex(t *testing.T) {
 			Where(NewField("status").Eq(1)).
 			Label("u")
 
-        // 主查询：以 userInfo 作为 FROM 子查询，再 JOIN loginStats
-        parent := Table("").FromSub(userInfo)
-        sql, params := parent.
-            Select(
-                parent.Field("id"),
-                parent.Field("name"),
-                loginStats.Field("login_count"),
-                loginStats.Field("last_login"),
-            ).
-            LeftJoin(loginStats, parent.Field("id").Eq(loginStats.Field("user_id"))).
-            Where(
-                parent.Field("age").Gte(18),
-                Or(
-                    parent.Field("name").Like("张%"),
-                    parent.Field("name").Like("李%"),
-                ),
-            ).
-            Order(loginStats.Field("login_count").Desc()).
-            Limit(20).
-            Query()
+		// 主查询：以 userInfo 作为 FROM 子查询，再 JOIN loginStats
+		parent := Table("").FromSub(userInfo)
+		sql, params := parent.
+			Select(
+				parent.Field("id"),
+				parent.Field("name"),
+				loginStats.Field("login_count"),
+				loginStats.Field("last_login"),
+			).
+			LeftJoin(loginStats, parent.Field("id").Eq(loginStats.Field("user_id"))).
+			Where(
+				parent.Field("age").Gte(18),
+				Or(
+					parent.Field("name").Like("张%"),
+					parent.Field("name").Like("李%"),
+				),
+			).
+			Order(loginStats.Field("login_count").Desc()).
+			Limit(20).
+			Query()
 
 		fmt.Println("=== 复杂嵌套子查询测试 ===")
 		fmt.Println("SQL:", sql)
@@ -246,19 +246,22 @@ func TestSubqueryComplex(t *testing.T) {
 			Select("id", "name", "create_time").
 			Where(NewField("status").Eq(1))
 
-		// UNION 合并，Label 在最后
-		uni := Table("").
+		//// UNION 合并，Label 在最后
+		//uni := Table("").
+		//	Union(t1).
+		//	Union(t2).
+		//	Label("merged")
+		//
+		//// 主查询
+		//sql, params := uni.
+		//	Select(uni.Field("id"), uni.Field("name")).
+		//	Where(uni.Field("create_time").Gt(UnixTimeStamp(NewField("2024-01-01")))).
+		//	Order(uni.Field("create_time").Desc()).
+		//	Query()
+
+		sql, params := Table("").
 			Union(t1).
-			Union(t2).
-			Label("merged")
-
-		// 主查询
-		sql, params := uni.
-			Select(uni.Field("id"), uni.Field("name")).
-			Where(uni.Field("create_time").Gt(UnixTimeStamp(NewField("2024-01-01")))).
-			Order(uni.Field("create_time").Desc()).
-			Query()
-
+			Union(t2).Query()
 		fmt.Println("=== UNION 子查询测试 ===")
 		fmt.Println("SQL:", sql)
 		fmt.Println("参数:", params)
@@ -387,4 +390,20 @@ func TestSubqueryBestPractices(t *testing.T) {
 		Query()
 	fmt.Println("SQL:", sql)
 	fmt.Println()
+}
+
+func TestUy(t *testing.T) {
+	utr := Table("user_trial_records")
+
+	is_active := If(
+		Or(utr.Field("is_active").Eq(0), And(utr.Field("is_active").Eq(0), utr.Field("is_active").Gt(0))),
+		0,
+		1).As("is_active")
+
+	utr = utr.Select("function_code", is_active)
+	utr = utr.Where(utr.Field("username").Eq("wani"))
+	sql, _ := utr.Query()
+	fmt.Println("SQL:", sql)
+	fmt.Println()
+
 }

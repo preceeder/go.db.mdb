@@ -261,7 +261,7 @@ func NotExists(str string) Expr {
 //		},
 //	},
 // Or 组合多个表达式，使用 OR 连接
-// 示例: Or(Eq("x1", 11), Gte("x2", 45)) -> ((x1 = 11) OR (x2 >= 45))
+// 示例: Or(Eq("x1", 11), Gte("x2", 45)) -> (x1 = 11 OR x2 >= 45)
 func Or(expr ...Expr) Expr {
 	if len(expr) == 0 {
 		return Condition{Name: "", Value: &map[string]any{}, S: ""}
@@ -271,18 +271,17 @@ func Or(expr ...Expr) Expr {
 	bf.WriteString("(")
 	var value = map[string]any{}
 	for _, an := range expr {
-		bf.WriteString("(")
 		if ve := an.Values(); ve != nil {
 			for k, v := range *ve {
 				value[k] = v
 			}
 		}
 		bf.WriteString(an.String())
-		bf.WriteString(") OR ")
+		bf.WriteString(" OR ")
 	}
 	// 移除最后一个 " OR "
-	if bf.Len() > 5 {
-		bf.Truncate(bf.Len() - 5)
+	if bf.Len() > 4 {
+		bf.Truncate(bf.Len() - 4)
 	}
 	bf.WriteString(")")
 
@@ -290,7 +289,7 @@ func Or(expr ...Expr) Expr {
 }
 
 // And 组合多个表达式，使用 AND 连接
-// 示例: And(Eq("x1", 11), Gte("x2", 45)) -> ((x1 = 11) AND (x2 >= 45))
+// 示例: And(Eq("x1", 11), Gte("x2", 45)) -> (x1 = 11 AND x2 >= 45)
 func And(expr ...Expr) Expr {
 	if len(expr) == 0 {
 		return Condition{Name: "", Value: &map[string]any{}, S: ""}

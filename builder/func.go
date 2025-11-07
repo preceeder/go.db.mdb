@@ -142,9 +142,9 @@ func CurDate() Fd {
 }
 
 func ConcatGroup(expr any, sep ...string) Fd {
-    str := "GROUP_CONCAT(%v)"
+	str := "GROUP_CONCAT(%v)"
 	if len(sep) > 0 {
-        str = fmt.Sprintf("GROUP_CONCAT(%%v SEPARATOR '%s')", sep[0])
+		str = fmt.Sprintf("GROUP_CONCAT(%%v SEPARATOR '%s')", sep[0])
 	}
 	f := &Fd{
 		v: []any{expr},
@@ -155,7 +155,7 @@ func ConcatGroup(expr any, sep ...string) Fd {
 }
 
 func Round(expr any, num int) Fd {
-    str := "ROUND(%v, %d)"
+	str := "ROUND(%v, %d)"
 	f := &Fd{
 		v: []any{expr, num},
 		s: str,
@@ -165,7 +165,7 @@ func Round(expr any, num int) Fd {
 }
 
 func cast(expr any, castType string) Fd {
-    str := fmt.Sprintf("cast(%%v as %s)", castType)
+	str := fmt.Sprintf("cast(%%v as %s)", castType)
 	f := &Fd{
 		v: []any{expr},
 		s: str,
@@ -253,7 +253,7 @@ func Now() Fd {
 }
 
 func DateSub(tm any, interval string) Fd {
-    f := &Fd{s: "DATE_SUB(%v, " + interval + ")",
+	f := &Fd{s: "DATE_SUB(%v, " + interval + ")",
 		v: []any{tm},
 	}
 
@@ -264,7 +264,7 @@ func DateSub(tm any, interval string) Fd {
 }
 
 func UnixTimeStamp(tm any) Fd {
-    f := &Fd{s: "UNIX_TIMESTAMP(%v)",
+	f := &Fd{s: "UNIX_TIMESTAMP(%v)",
 		v: []any{tm},
 	}
 	f.ColumnNameHandler()
