@@ -28,7 +28,7 @@ func TestJoin(b *testing.T) {
 		).Group(tu.Field("sexual"), tu.Field("age")).
 		Having(Sum(tu.Field("age")).Gt(20)).
 		Limit(5).OffSet(2)
-	sqlStr, data := sql.Query()
+	sqlStr, data := sql.Sql()
 	fmt.Println(sqlStr)
 	fmt.Println(data)
 }
@@ -44,7 +44,7 @@ func testUnion() {
 	uni := Table("").Label("oiu")
 	uni = uni.Union(tu).Union(tl).Union(ti).Select(uni.Field("id"), uni.Field("name")).Group(uni.Field("id")).Order().Limit(5)
 	uni = uni.Order(uni.Field("id").Desc(), uni.Field("name").Asc())
-	sqlStr, data := uni.Query()
+	sqlStr, data := uni.Sql()
 	fmt.Println(sqlStr)
 	fmt.Println(data)
 }
@@ -53,20 +53,20 @@ func testDelete() {
 	tu := Table("t_user").As("u")
 	ti := Table("t_user_info").As("t")
 
-	fr, data := tu.Where(tu.Field("id").Eq(34), tu.Field("name").Eq("nus")).Delete()
+	fr, data := tu.Where(tu.Field("id").Eq(34), tu.Field("name").Eq("nus")).Delete().Sql()
 	fmt.Println(fr)
 	fmt.Println(data)
 
 	de, data := tu.LeftJoin(ti, tu.Field("id").Eq(ti.Field("id"))).
 		Where(ti.Field("user_id").IsNull(), tu.Field("user_name").Eq("<UNK>")).
-		Delete(tu)
+		Delete(tu).Sql()
 	fmt.Println(de)
 	fmt.Println(data)
 
 	tt := ti.Select(ti.Field("id")).Where(ti.Field("user_id").Gt(34)).Label("sd")
 	de, data = tu.LeftJoin(tt, tu.Field("id").Eq(tt.Field("id"))).
 		Where(tt.Field("user_id").IsNull(), tu.Field("user_name").Eq("<UNK>")).
-		Delete(tu)
+		Delete(tu).Sql()
 	fmt.Println(de, data)
 }
 
@@ -76,7 +76,7 @@ func TestSimpleQuery(t *testing.T) {
 	sql := tu.Select(tu.Field("id"), tu.Field("name")).
 		Where(tu.Field("id").Eq(1)).
 		Limit(10).Offset(20)
-	sql2, data := sql.Query()
+	sql2, data := sql.Sql()
 
 	fmt.Println(sql2)
 	fmt.Println(data)
@@ -101,7 +101,7 @@ func TestComplexQuery(b *testing.T) {
 		Order(tu.Field("id").Desc()).
 		Limit(10).
 		Offset(5)
-	sql2, data := sql.Query()
+	sql2, data := sql.Sql()
 	fmt.Println(sql2)
 	fmt.Println(data)
 

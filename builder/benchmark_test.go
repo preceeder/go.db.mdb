@@ -12,7 +12,7 @@ func BenchmarkSimpleQuery(b *testing.B) {
 		sql := tu.Select(tu.Field("id"), tu.Field("name")).
 			Where(tu.Field("id").Eq(1)).
 			Limit(10)
-		_, _ = sql.Query()
+		_, _ = sql.Sql()
 	}
 }
 
@@ -37,7 +37,7 @@ func BenchmarkComplexQuery(b *testing.B) {
 			Order(tu.Field("id").Desc()).
 			Limit(10).
 			Offset(5)
-		_, _ = sql.Query()
+		_, _ = sql.Sql()
 	}
 }
 

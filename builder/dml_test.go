@@ -10,7 +10,7 @@ func TestInsertMap(t *testing.T) {
 	sql, params := tbl.InsertMap(map[string]any{
 		"name": "nick",
 		"age":  23,
-	})
+	}).Sql()
 	fmt.Println("InsertMap SQL:", sql)
 	fmt.Println("InsertMap Params:", params)
 	if sql == "" || len(params) != 2 {
@@ -28,7 +28,7 @@ func TestInsertMany(t *testing.T) {
 		{"name": "a", "age": 1},
 		{"name": "b", "age": 2},
 	}
-	sql, params := tbl.InsertMany(rows)
+	sql, params := tbl.InsertMany(rows).Sql()
 	fmt.Println("InsertMany SQL:", sql)
 	fmt.Println("InsertMany Params:", params)
 	if sql == "" || len(params) != 4 { // 2 rows * 2 cols
@@ -46,7 +46,7 @@ func TestUpdateMap_WithWhere(t *testing.T) {
 		UpdateMap(map[string]any{
 			"name": "new",
 			"age":  30,
-		})
+		}).Sql()
 	fmt.Println("UpdateMap SQL:", sql)
 	fmt.Println("UpdateMap Params:", params)
 	if sql == "" || len(params) != 3 { // name, age, id
@@ -64,7 +64,7 @@ func TestUpdateMap_WithJoin(t *testing.T) {
 		Where(info.Field("user_id").Eq(2, "uid")).
 		UpdateMap(map[string]any{
 			"name": "mike",
-		})
+		}).Sql()
 	fmt.Println("UpdateMap (join) SQL:", sql)
 	fmt.Println("UpdateMap (join) Params:", params)
 	if sql == "" || len(params) != 2 { // name, uid
@@ -76,7 +76,7 @@ func TestDelete_WithWhere(t *testing.T) {
 	tbl := Table("t_user").As("u")
 	sql, params := tbl.
 		Where(tbl.Field("id").Eq(1, "id")).
-		Delete()
+		Delete().Sql()
 	fmt.Println("Delete SQL:", sql)
 	fmt.Println("Delete Params:", params)
 	if sql == "" || len(params) != 1 {
@@ -89,7 +89,7 @@ func TestDelete_WithJoinTarget(t *testing.T) {
 	i := Table("t_user_info").As("i")
 	sql, params := u.LeftJoin(i, u.Field("id").Eq(i.Field("user_id"))).
 		Where(i.Field("user_id").IsNull(), u.Field("status").Eq(0, "st")).
-		Delete(u)
+		Delete(u).Sql()
 	fmt.Println("Delete (join target) SQL:", sql)
 	fmt.Println("Delete (join target) Params:", params)
 	if sql == "" || len(params) != 1 {
@@ -99,10 +99,71 @@ func TestDelete_WithJoinTarget(t *testing.T) {
 
 func TestDelete_WithoutWhere(t *testing.T) {
 	tbl := Table("t_tmp_clean")
-	sql, params := tbl.Delete()
+	sql, params := tbl.Delete().Sql()
 	fmt.Println("Delete no where SQL:", sql)
 	fmt.Println("Delete no where Params:", params)
 	if sql == "" {
 		t.Fatal("Delete no where build failed")
+	}
+}
+
+func TestInsertIgnoreMap(t *testing.T) {
+	tbl := Table("t_user")
+	sql, params := tbl.InsertIgnoreMap(map[string]any{
+		"name": "nick",
+		"age":  23,
+	}).Sql()
+	fmt.Println("InsertIgnoreMap SQL:", sql)
+	fmt.Println("InsertIgnoreMap Params:", params)
+	if sql == "" || len(params) != 2 {
+		t.Fatal("InsertIgnoreMap build failed")
+	}
+	if want := "INSERT IGNORE INTO t_user (`name`, `age`) VALUES (:name, :age)"; sql != want {
+		fmt.Println("Note: column order may vary due to map iteration")
+	}
+}
+
+func TestInsertIgnoreMany(t *testing.T) {
+	tbl := Table("t_user")
+	rows := []map[string]any{
+		{"name": "a", "age": 1},
+		{"name": "b", "age": 2},
+	}
+	sql, params := tbl.InsertIgnoreMany(rows).Sql()
+	fmt.Println("InsertIgnoreMany SQL:", sql)
+	fmt.Println("InsertIgnoreMany Params:", params)
+	if sql == "" || len(params) != 4 {
+		t.Fatal("InsertIgnoreMany build failed")
+	}
+}
+
+func TestInsertOnDuplicateColsMany(t *testing.T) {
+	rows := []map[string]any{
+		{"name": "a", "age": 1},
+		{"name": "b", "age": 2},
+	}
+	tbl := Table("t_user")
+	sql, params := tbl.InsertOnDuplicateColsMany(rows, []string{"name"}).Sql()
+	fmt.Println("InsertOnDuplicateColsMany SQL:", sql)
+	fmt.Println("InsertOnDuplicateColsMany Params:", params)
+	if sql == "" || len(params) != 4 {
+		t.Fatal("InsertOnDuplicateColsMany build failed")
+	}
+}
+
+func TestInsertOnDuplicateMapMany(t *testing.T) {
+	rows := []map[string]any{
+		{"name": "a", "age": 1},
+		{"name": "b", "age": 2},
+	}
+	update := map[string]any{
+		"age": 18,
+	}
+	tbl := Table("t_user")
+	sql, params := tbl.InsertOnDuplicateMapMany(rows, update).Sql()
+	fmt.Println("InsertOnDuplicateMapMany SQL:", sql)
+	fmt.Println("InsertOnDuplicateMapMany Params:", params)
+	if sql == "" || len(params) != 4+len(update) {
+		t.Fatal("InsertOnDuplicateMapMany build failed")
 	}
 }

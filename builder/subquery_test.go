@@ -22,7 +22,7 @@ func TestSubqueryInJoin(t *testing.T) {
 			Select(tu.Field("id"), tu.Field("name"), ti.Field("age"), ti.Field("address")).
 			LeftJoin(ti, tu.Field("id").Eq(ti.Field("user_id"))).
 			Where(tu.Field("id").Gt(0)).
-			Query()
+			Sql()
 
 		fmt.Println("=== 子查询 JOIN 测试 ===")
 		fmt.Println("SQL:", sql)
@@ -50,7 +50,7 @@ func TestSubqueryInJoin(t *testing.T) {
 			Select(tu.Field("id"), ti.Field("age"), tl.Field("last_login_time")).
 			LeftJoin(ti, tu.Field("id").Eq(ti.Field("user_id"))).
 			LeftJoin(tl, tu.Field("id").Eq(tl.Field("user_id"))).
-			Query()
+			Sql()
 
 		fmt.Println("=== 多层嵌套子查询 JOIN 测试 ===")
 		fmt.Println("SQL:", sql)
@@ -66,7 +66,7 @@ func TestSubqueryInWhere(t *testing.T) {
 		subSQL, _ := Table("t_user_login_info").
 			Select("user_id").
 			Where(NewField("last_login_time").Gt(UnixTimeStamp(NewField("2024-01-01")))).
-			Query()
+			Sql()
 
 		// 主查询：查询这些活跃用户
 		// 注意：In 方法可以直接接受 SQL 字符串作为子查询
@@ -74,7 +74,7 @@ func TestSubqueryInWhere(t *testing.T) {
 		sql, params := tu.
 			Select("*").
 			Where(tu.Field("id").In(fmt.Sprintf("(%s)", subSQL))). // 使用子查询结果，需要用括号包裹
-			Query()
+			Sql()
 
 		fmt.Println("=== IN 子查询测试 ===")
 		fmt.Println("SQL:", sql)
@@ -89,13 +89,13 @@ func TestSubqueryInWhere(t *testing.T) {
 		subSQL, _ := Table("t_user_info").
 			Select("1"). // EXISTS 只需要检查存在性
 			Where(NewField("user_id").Eq(NewField("u.id"))).
-			Query()
+			Sql()
 
 		// 主查询
 		sql, params := tu.
 			Select("*").
 			Where(NotExists(subSQL)). // NOT EXISTS
-			Query()
+			Sql()
 
 		fmt.Println("=== EXISTS 子查询测试 ===")
 		fmt.Println("SQL:", sql)
@@ -109,7 +109,7 @@ func TestSubqueryInWhere(t *testing.T) {
 		// 子查询：获取平均年龄
 		subSQL, _ := Table("t_user_info").
 			Select(Sum(NewField("age")).As("avg_age")).
-			Query()
+			Sql()
 
 		// 主查询：年龄大于平均年龄的用户
 		// 使用字符串拼接子查询到字段中
@@ -117,7 +117,7 @@ func TestSubqueryInWhere(t *testing.T) {
 		sql, params := tu.
 			Select("*").
 			Where(tu.Field("age").Gt(avgAgeField)).
-			Query()
+			Sql()
 
 		fmt.Println("=== 比较运算符子查询测试 ===")
 		fmt.Println("SQL:", sql)
@@ -146,7 +146,7 @@ func TestSubqueryInFrom(t *testing.T) {
 			Select(parent.Field("age"), parent.Field("user_count")).
 			Where(parent.Field("user_count").Gt(10)).
 			Order(parent.Field("age").Desc()).
-			Query()
+			Sql()
 
 		fmt.Println("=== FROM 子查询测试 ===")
 		fmt.Println("SQL:", sql)
@@ -198,7 +198,7 @@ func TestSubqueryComplex(t *testing.T) {
 			).
 			Order(loginStats.Field("login_count").Desc()).
 			Limit(20).
-			Query()
+			Sql()
 
 		fmt.Println("=== 复杂嵌套子查询测试 ===")
 		fmt.Println("SQL:", sql)
@@ -261,7 +261,7 @@ func TestSubqueryComplex(t *testing.T) {
 
 		sql, params := Table("").
 			Union(t1).
-			Union(t2).Query()
+			Union(t2).Sql()
 		fmt.Println("=== UNION 子查询测试 ===")
 		fmt.Println("SQL:", sql)
 		fmt.Println("参数:", params)
@@ -285,7 +285,7 @@ func TestSubqueryWithParams(t *testing.T) {
 			Select(tu.Field("id"), subQuery.Field("age")).
 			LeftJoin(subQuery, tu.Field("id").Eq(subQuery.Field("user_id"))).
 			Where(tu.Field("id").Gt(0)).
-			Query()
+			Sql()
 
 		fmt.Println("=== 子查询参数传递测试 ===")
 		fmt.Println("SQL:", sql)
@@ -303,11 +303,11 @@ func TestSubqueryExamples(t *testing.T) {
 	tu := Table("t_user")
 	subQuery, _ := Table("t_order").
 		Select("user_id").
-		Query()
+		Sql()
 	sql, _ := tu.
 		Select("*").
 		Where(tu.Field("id").NotIn(fmt.Sprintf("(%s)", subQuery))).
-		Query()
+		Sql()
 	fmt.Println("SQL:", sql)
 	fmt.Println()
 
@@ -322,7 +322,7 @@ func TestSubqueryExamples(t *testing.T) {
 		Order(Count(NewField("id")).Desc()).
 		Limit(1).
 		Label("top_user")
-	sql, _ = orderStats.Query()
+	sql, _ = orderStats.Sql()
 	fmt.Println("SQL:", sql)
 	fmt.Println()
 
@@ -331,7 +331,7 @@ func TestSubqueryExamples(t *testing.T) {
 	loginQuery, _ := Table("t_user_login_info").
 		Select(Max(NewField("login_time")).As("last_login")).
 		Where(NewField("user_id").Eq(NewField("u.id"))).
-		Query()
+		Sql()
 	tu = Table("t_user").As("u")
 	sql, _ = tu.
 		Select(
@@ -339,7 +339,7 @@ func TestSubqueryExamples(t *testing.T) {
 			tu.Field("name"),
 			NewField(fmt.Sprintf("(%s)", loginQuery)).As("last_login"),
 		).
-		Query()
+		Sql()
 	fmt.Println("SQL:", sql)
 	fmt.Println()
 
@@ -349,14 +349,14 @@ func TestSubqueryExamples(t *testing.T) {
 	orderCountSub, _ := Table("t_order").
 		Select(Count(NewField("id"))).
 		Where(NewField("user_id").Eq(NewField("u.id"))).
-		Query()
+		Sql()
 	sql, _ = tu.
 		Select(
 			tu.Field("id"),
 			tu.Field("name"),
 			NewField(fmt.Sprintf("(%s)", orderCountSub)).As("order_count"),
 		).
-		Query()
+		Sql()
 	fmt.Println("SQL:", sql)
 	fmt.Println()
 }
@@ -387,7 +387,7 @@ func TestSubqueryBestPractices(t *testing.T) {
 			subQuery.Field("age"), // ✅ 子查询字段
 		).
 		LeftJoin(subQuery, tu.Field("id").Eq(subQuery.Field("user_id"))).
-		Query()
+		Sql()
 	fmt.Println("SQL:", sql)
 	fmt.Println()
 }
@@ -402,7 +402,7 @@ func TestUy(t *testing.T) {
 
 	utr = utr.Select("function_code", is_active)
 	utr = utr.Where(utr.Field("username").Eq("wani"))
-	sql, _ := utr.Query()
+	sql, _ := utr.Sql()
 	fmt.Println("SQL:", sql)
 	fmt.Println()
 
