@@ -36,6 +36,11 @@ type union struct {
 	Table    SqlBuilder
 }
 
+type setClause struct {
+	clause string
+	params map[string]any
+}
+
 type SqlBuilder struct {
 	Table      *table
 	JoinTable  []join
@@ -67,6 +72,8 @@ type SqlBuilder struct {
 	dmlType string      // DML 操作类型: "insert", "insert_ignore", "insert_many", "insert_ignore_many", "update", "update_ordered", "insert_on_duplicate_cols", "insert_on_duplicate_map", "delete"
 	dmlData interface{} // DML 操作数据
 	deleteTarget *SqlBuilder // Delete 操作的删除目标表（可选）
+
+	customSetClauses []setClause // 额外的 SET 子句
 }
 
 // As 设置表的别名
@@ -471,23 +478,51 @@ func (s *SqlBuilder) UpdateMap(set map[string]any) *SqlBuilder {
 	return s
 }
 
+// Set 添加自定义的 SET 子句（例如: Set("`amount` = `amount` - :dec", map[string]any{"dec": 2}))
+// 该方法可与 UpdateMap/UpdateOrdered 共同使用，原有的更新功能保持不变
+func (s *SqlBuilder) Set(clause string, params ...map[string]any) *SqlBuilder {
+	var merged map[string]any
+	if len(params) > 0 && params[0] != nil {
+		merged = mergeParams(nil, params[0])
+	}
+	s.customSetClauses = append(s.customSetClauses, setClause{
+		clause: clause,
+		params: merged,
+	})
+	return s
+}
+
 // buildUpdateMap 构建更新 SQL：UPDATE <table [JOIN ...]> SET `a`=:a,`b`=:b WHERE ...
 func (s *SqlBuilder) buildUpdateMap() (string, map[string]any) {
 	if s.Table == nil || s.Table.GetName() == "" {
 		return "", nil
 	}
 	set, ok := s.dmlData.(map[string]any)
-	if !ok || len(set) == 0 {
+	if (!ok || len(set) == 0) && len(s.customSetClauses) == 0 {
 		return "", nil
 	}
 	// 表与 Join
 	tbl, tblParams := s.getTable()
 	// SET 子句
-	setParts := make([]string, 0, len(set))
-	setParams := make(map[string]any, len(set))
-	for k, v := range set {
-		setParts = append(setParts, ColumnNameHandler(k)+" = :"+k)
-		setParams[k] = v
+	setParts := make([]string, 0, len(set)+len(s.customSetClauses))
+	var setParams map[string]any
+	if ok {
+		for k, v := range set {
+			part, params := buildSetAssignment(k, v)
+			setParts = append(setParts, part)
+			if params != nil {
+				setParams = mergeParams(setParams, params)
+			}
+		}
+	}
+	for _, clause := range s.customSetClauses {
+		setParts = append(setParts, clause.clause)
+		if clause.params != nil {
+			setParams = mergeParams(setParams, clause.params)
+		}
+	}
+	if len(setParts) == 0 {
+		return "", nil
 	}
 	// WHERE 子句
 	whereStr, whereParams := s.getWhere()
@@ -519,19 +554,33 @@ func (s *SqlBuilder) buildUpdateOrdered() (string, map[string]any) {
 		return "", nil
 	}
 	orderedSet, ok := s.dmlData.([]map[string]any)
-	if !ok || len(orderedSet) == 0 {
+	if (!ok || len(orderedSet) == 0) && len(s.customSetClauses) == 0 {
 		return "", nil
 	}
 	// 表与 Join
 	tbl, tblParams := s.getTable()
 	// SET 子句（保持顺序）
-	setParts := make([]string, 0, len(orderedSet))
-	setParams := make(map[string]any)
-	for _, item := range orderedSet {
-		for k, v := range item {
-			setParts = append(setParts, ColumnNameHandler(k)+" = :"+k)
-			setParams[k] = v
+	setParts := make([]string, 0, len(orderedSet)+len(s.customSetClauses))
+	var setParams map[string]any
+	if ok {
+		for _, item := range orderedSet {
+			for k, v := range item {
+				part, params := buildSetAssignment(k, v)
+				setParts = append(setParts, part)
+				if params != nil {
+					setParams = mergeParams(setParams, params)
+				}
+			}
 		}
+	}
+	for _, clause := range s.customSetClauses {
+		setParts = append(setParts, clause.clause)
+		if clause.params != nil {
+			setParams = mergeParams(setParams, clause.params)
+		}
+	}
+	if len(setParts) == 0 {
+		return "", nil
 	}
 	// WHERE 子句
 	whereStr, whereParams := s.getWhere()
@@ -546,6 +595,51 @@ func (s *SqlBuilder) buildUpdateOrdered() (string, map[string]any) {
 	bf.WriteString(strings.Join(setParts, ", "))
 	bf.WriteString(whereStr)
 	return bf.String(), params
+}
+
+func buildSetAssignment(column string, value any) (string, map[string]any) {
+	return buildSetAssignmentWithPlaceholder(column, value, column)
+}
+
+func buildSetAssignmentWithPlaceholder(column string, value any, placeholder string) (string, map[string]any) {
+	colName := ColumnNameHandler(column)
+	switch val := value.(type) {
+	case SetExpression:
+		params := val.parameters()
+		if len(params) > 0 {
+			return colName + " = " + val.expression(), mergeParams(nil, params)
+		}
+		return colName + " = " + val.expression(), nil
+	case *SetExpression:
+		if val == nil {
+			return colName + " = :" + placeholder, map[string]any{
+				placeholder: nil,
+			}
+		}
+		params := val.parameters()
+		if len(params) > 0 {
+			return colName + " = " + val.expression(), mergeParams(nil, params)
+		}
+		return colName + " = " + val.expression(), nil
+	case Fd:
+		return buildSetAssignmentWithValues(colName, val.String(), val.Values())
+	case Field:
+		return buildSetAssignmentWithValues(colName, val.String(), val.Values())
+	case Expr:
+		return buildSetAssignmentWithValues(colName, val.String(), val.Values())
+	default:
+		return colName + " = :" + placeholder, map[string]any{
+			placeholder: val,
+		}
+	}
+}
+
+func buildSetAssignmentWithValues(columnExpr string, rhs string, values *map[string]any) (string, map[string]any) {
+	var params map[string]any
+	if values != nil && len(*values) > 0 {
+		params = mergeParams(nil, *values)
+	}
+	return columnExpr + " = " + rhs, params
 }
 
 // InsertOnDuplicateColsData 存储 InsertOnDuplicateCols 的数据
@@ -692,9 +786,12 @@ func (s *SqlBuilder) buildInsertOnDuplicateMap() (string, map[string]any) {
 	updateParams := make(map[string]any, len(data.Update))
 	upd := make([]string, 0, len(data.Update))
 	for k, v := range data.Update {
-		key := k + "_upd"
-		upd = append(upd, ColumnNameHandler(k)+" = :"+key)
-		updateParams[key] = v
+		placeholder := k + "_upd"
+		part, params := buildSetAssignmentWithPlaceholder(k, v, placeholder)
+		upd = append(upd, part)
+		if params != nil {
+			updateParams = mergeParams(updateParams, params)
+		}
 	}
 
 	params := mergeParams(insertParams, updateParams)

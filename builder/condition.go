@@ -3,76 +3,55 @@ package builder
 import (
 	"bytes"
 	"fmt"
-	"strings"
 )
 
 func handler(str, field string, d any, key ...string) Expr {
-	var value map[string]any = make(map[string]any)
 	field = ColumnNameHandler(field)
+	value := make(map[string]any)
+
 	if len(key) > 0 {
-		// 使用参数化查询，更安全
-		var bf bytes.Buffer
-		bf.WriteString(field)
-		bf.WriteString(" = :")
-		bf.WriteString(key[0])
-		str = bf.String()
-		value = map[string]any{key[0]: d}
-	} else {
-		switch v := d.(type) {
-		case Fd:
-			// 对于 Fd 类型，直接构建字符串，避免 fmt.Sprintf
-			var bf bytes.Buffer
-			if strings.HasPrefix(str, "%s") && strings.Contains(str, "%v") {
-				// 处理 "%s = %v" 格式
-				bf.WriteString(field)
-				bf.WriteString(" = ")
-				bf.WriteString(v.String())
-			} else {
-				// 其他格式仍使用 fmt.Sprintf
-				str = fmt.Sprintf(str, field, v.String())
-				bf.WriteString(str)
-			}
-			str = bf.String()
-			if v.Values() != nil {
-				value = *v.Values()
-			}
-		case string:
-			// 注意：直接拼接字符串存在 SQL 注入风险，推荐使用参数化查询（通过 key 参数）
-			// 使用 escapeSQLString 转义特殊字符
-			escaped := escapeSQLString(v)
-			var bf bytes.Buffer
-			bf.WriteString(field)
-			bf.WriteString(" = '")
-			bf.WriteString(escaped)
-			bf.WriteString("'")
-			str = bf.String()
-		case []string:
-			// 直接拼接，存在风险
-			d = StringSliceToString(v)
-			var bf bytes.Buffer
-			bf.WriteString(field)
-			bf.WriteString(" IN (")
-			bf.WriteString(d.(string))
-			bf.WriteString(")")
-			str = bf.String()
-		case []int, []int32, []int64, []float32, []float64:
-			// 数字类型相对安全，但仍有风险
-			numStr, err := NumberSliceToString(v)
-			if err != nil {
-				// 如果转换失败，使用原始值（可能导致错误，但不 panic）
-				str = fmt.Sprintf(str, field, v)
-			} else {
-				var bf bytes.Buffer
-				bf.WriteString(field)
-				bf.WriteString(" IN (")
-				bf.WriteString(numStr)
-				bf.WriteString(")")
-				str = bf.String()
-			}
-		default:
-			str = fmt.Sprintf(str, field, d)
-		}
+		value[key[0]] = d
+		str = fmt.Sprintf(str, field, key[0])
+		return Condition{Name: field, Value: &value, S: str}
 	}
+
+	switch v := d.(type) {
+	case Fd:
+		str = fmt.Sprintf(str, field, v.String())
+		if ve := v.Values(); ve != nil {
+			for k, val := range *ve {
+				value[k] = val
+			}
+		}
+	case Expr:
+		str = fmt.Sprintf(str, field, v.String())
+		if ve := v.Values(); ve != nil {
+			for k, val := range *ve {
+				value[k] = val
+			}
+		}
+	case Field:
+		str = fmt.Sprintf(str, field, v.String())
+		if ve := v.Values(); ve != nil {
+			for k, val := range *ve {
+				value[k] = val
+			}
+		}
+	case string:
+		escaped := escapeSQLString(v)
+		str = fmt.Sprintf(str, field, "'"+escaped+"'")
+	case []string:
+		str = fmt.Sprintf(str, field, StringSliceToString(v))
+	case []int, []int32, []int64, []float32, []float64:
+		if numStr, err := NumberSliceToString(v); err == nil {
+			str = fmt.Sprintf(str, field, numStr)
+		} else {
+			str = fmt.Sprintf(str, field, v)
+		}
+	default:
+		str = fmt.Sprintf(str, field, d)
+	}
+
 	return Condition{Name: field, Value: &value, S: str}
 }
 
@@ -204,7 +183,7 @@ func in(field string, d any, key ...string) Expr {
 		// 说明后一个 d 是sql查询
 		case string:
 			// 子查询
-            str = "%s in (%s)"
+			str = "%s in (%s)"
 			field = ColumnNameHandler(field)
 			var value map[string]any = make(map[string]any)
 			str = fmt.Sprintf(str, field, d)
@@ -229,7 +208,7 @@ func notIn(field string, d any, key ...string) Expr {
 		// 说明后一个 d 是sql查询
 		case string:
 			// 子查询
-            str = "%s not in (%s)"
+			str = "%s not in (%s)"
 			field = ColumnNameHandler(field)
 			var value map[string]any = make(map[string]any)
 			str = fmt.Sprintf(str, field, d)
@@ -260,6 +239,7 @@ func NotExists(str string) Expr {
 //			Neq("x4", "tx2"),
 //		},
 //	},
+//
 // Or 组合多个表达式，使用 OR 连接
 // 示例: Or(Eq("x1", 11), Gte("x2", 45)) -> (x1 = 11 OR x2 >= 45)
 func Or(expr ...Expr) Expr {

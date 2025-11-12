@@ -227,7 +227,7 @@ func TestSubqueryComplex(t *testing.T) {
 			).
 			LeftJoin(orderCount, tu.Field("id").Eq(orderCount.Field("user_id"))).
 			Where(tu.Field("id").In("SELECT user_id FROM t_order WHERE status = 1")).
-			Query()
+			Sql()
 
 		fmt.Println("=== 子查询配合聚合函数测试 ===")
 		fmt.Println("SQL:", sql)

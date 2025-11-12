@@ -2,6 +2,7 @@ package builder
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -165,5 +166,94 @@ func TestInsertOnDuplicateMapMany(t *testing.T) {
 	fmt.Println("InsertOnDuplicateMapMany Params:", params)
 	if sql == "" || len(params) != 4+len(update) {
 		t.Fatal("InsertOnDuplicateMapMany build failed")
+	}
+}
+
+func TestInsertOnDuplicateMapMany_WithExpressions(t *testing.T) {
+	rows := []map[string]any{
+		{
+			"username":         "name",
+			"func_code":        "sd",
+			"rule_id":          "ed",
+			"available_quota":  "se",
+			"reset_cycle_days": "sde",
+			"last_reset_time":  "sdes",
+			"next_reset_time":  "ss",
+			"expire_time":      "2025-01-03",
+		},
+	}
+	update := map[string]any{
+		"expire_time": SetExpr("DATE_ADD(`expire_time`, INTERVAL 30 DAY)", nil),
+	}
+
+	tbl := Table("user_quota_account")
+	sqlStr, params := tbl.InsertOnDuplicateMapMany(rows, update).Sql()
+
+	if sqlStr == "" {
+		t.Fatal("InsertOnDuplicateMapMany with expression build failed")
+	}
+	if !strings.Contains(sqlStr, "`expire_time` = DATE_ADD(`expire_time`, INTERVAL 30 DAY)") {
+		t.Fatalf("InsertOnDuplicateMapMany missing SetExpr expression, got: %s", sqlStr)
+	}
+
+	// 应包含 1 行插入参数
+	if len(params) != len(rows[0]) {
+		t.Fatalf("InsertOnDuplicateMapMany params unexpected: %+v", params)
+	}
+}
+
+func TestUpdateMap_WithExpressions(t *testing.T) {
+	tbl := Table("t_user").As("u")
+	sql, params := tbl.
+		Where(tbl.Field("id").Eq(1, "id")).
+		UpdateMap(map[string]any{
+			"amount": tbl.Field("amount").Sub(2),
+			"score":  SetExpr("COALESCE(`score`, 0) + :score_inc", map[string]any{"score_inc": 5}),
+		}).Sql()
+
+	if sql == "" {
+		t.Fatal("UpdateMap with expressions build failed")
+	}
+
+	if !strings.Contains(sql, "`amount` = u.amount - 2") {
+		t.Fatalf("UpdateMap should include field arithmetic, got: %s", sql)
+	}
+	if !strings.Contains(sql, "`score` = COALESCE(`score`, 0) + :score_inc") {
+		t.Fatalf("UpdateMap should include SetExpr expression, got: %s", sql)
+	}
+	if params["score_inc"] != 5 {
+		t.Fatalf("UpdateMap parameters missing or incorrect: %+v", params)
+	}
+	if params["id"] != 1 {
+		t.Fatalf("UpdateMap should keep where params, got: %+v", params)
+	}
+}
+
+func TestUpdateOrdered_WithExpressions(t *testing.T) {
+	tbl := Table("t_user").As("u")
+	sql, params := tbl.
+		Where(tbl.Field("id").Eq(1, "id")).
+		UpdateOrdered([]map[string]any{
+			{"amount": tbl.Field("amount").Sub(2)},
+			{"score": SetExpr("COALESCE(`score`, 0) + :score_inc", map[string]any{"score_inc": 5})},
+		}).Sql()
+
+	if sql == "" {
+		t.Fatal("UpdateOrdered with expressions build failed")
+	}
+
+	idxAmount := strings.Index(sql, "`amount` = u.amount - 2")
+	idxScore := strings.Index(sql, "`score` = COALESCE(`score`, 0) + :score_inc")
+	if idxAmount == -1 || idxScore == -1 {
+		t.Fatalf("UpdateOrdered missing expected expressions, got: %s", sql)
+	}
+	if idxAmount > idxScore {
+		t.Fatalf("UpdateOrdered should preserve custom order, got: %s", sql)
+	}
+	if params["score_inc"] != 5 {
+		t.Fatalf("UpdateOrdered parameters missing or incorrect: %+v", params)
+	}
+	if params["id"] != 1 {
+		t.Fatalf("UpdateOrdered should keep where params, got: %+v", params)
 	}
 }

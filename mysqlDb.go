@@ -143,6 +143,42 @@ func (s MysqlClient) ExecByBuilder(ctx context.Context, b *builder.SqlBuilder, t
 	return rs, nil
 }
 
+// ExecRaw 直接执行原生 SQL，支持可选事务
+func (s MysqlClient) ExecRaw(ctx context.Context, query string, args []any, tx ...*sqlx.Tx) (sql.Result, error) {
+	var (
+		rs  sql.Result
+		err error
+	)
+	if len(tx) > 0 && tx[0] != nil {
+		rs, err = tx[0].Exec(query, args...)
+	} else {
+		rs, err = s.Db.Exec(query, args...)
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "mdb ExecRaw failed", "error", err, "sql", query, "args", args)
+		return nil, err
+	}
+	return rs, nil
+}
+
+// QueryRaw 执行原生查询 SQL，将结果填充到 dest
+// dest 必须是可被 sqlx.Select 接受的类型，例如 *[]struct 或 *[]map[string]any
+func (s MysqlClient) QueryRaw(ctx context.Context, dest any, query string, args []any, tx ...*sqlx.Tx) error {
+	var err error
+	if len(tx) > 0 && tx[0] != nil {
+		err = tx[0].Select(dest, query, args...)
+	} else {
+		err = sqlx.Select(s.Db, dest, query, args...)
+	}
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.ErrorContext(ctx, "mdb QueryRaw failed", "error", err, "sql", query, "args", args)
+		}
+		return err
+	}
+	return nil
+}
+
 // map[string]any{"tableName": "t_user",  "Set":map[string]any{"nick": "nihao"}, "Where":map[string]any{"userId": "1111"}}
 // 下面你的跟新方法 可以按照户指定顺序更新字段,  有些时候需要指定更新顺序的 就用下买你的方法传入参数
 // map[string]any{"tableName": "t_user",  "Set":[]map[string]any{{"nick": "nihao"}, {"name": []string{"if(s=0, 1, 0)"}}}, "Where":map[string]any{"userId": "1111"}}
