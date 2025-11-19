@@ -65,12 +65,12 @@ type SqlBuilder struct {
 	// data holders for DML
 	// 不强制使用这些字段，提供便捷 DML 构建方法
 
-    // FromSubQuery 表示该查询的 FROM 来源是一个子查询
-    FromSubQuery *SqlBuilder
+	// FromSubQuery 表示该查询的 FROM 来源是一个子查询
+	FromSubQuery *SqlBuilder
 
 	// DML 操作相关字段
-	dmlType string      // DML 操作类型: "insert", "insert_ignore", "insert_many", "insert_ignore_many", "update", "update_ordered", "insert_on_duplicate_cols", "insert_on_duplicate_map", "delete"
-	dmlData interface{} // DML 操作数据
+	dmlType      string      // DML 操作类型: "insert", "insert_ignore", "insert_many", "insert_ignore_many", "update", "update_ordered", "insert_on_duplicate_cols", "insert_on_duplicate_map", "delete"
+	dmlData      interface{} // DML 操作数据
 	deleteTarget *SqlBuilder // Delete 操作的删除目标表（可选）
 
 	customSetClauses []setClause // 额外的 SET 子句
@@ -89,16 +89,385 @@ func (s *SqlBuilder) Label(label string) *SqlBuilder {
 	return s
 }
 
+// Copy 返回一个深度拷贝的 SqlBuilder 对象
+func (s *SqlBuilder) Copy() *SqlBuilder {
+	if s == nil {
+		return nil
+	}
+
+	// 创建新的 SqlBuilder
+	copyObject := &SqlBuilder{
+		LimitParam:  s.LimitParam,
+		OffsetParam: s.OffsetParam,
+		label:       s.label,
+		dmlType:     s.dmlType,
+	}
+
+	// 深度拷贝 Table
+	if s.Table != nil {
+		copyObject.Table = &table{
+			Db:         s.Table.Db,
+			Name:       s.Table.Name,
+			Label:      s.Table.Label,
+			ForceIndex: s.Table.ForceIndex,
+		}
+	}
+
+	// 深度拷贝 JoinTable
+	if len(s.JoinTable) > 0 {
+		copyObject.JoinTable = make([]join, len(s.JoinTable))
+		for i, j := range s.JoinTable {
+			subTableCopy := j.SubTable.Copy()
+			copyObject.JoinTable[i] = join{
+				JoinType: j.JoinType,
+				SubTable: *subTableCopy,      // 递归拷贝
+				On:       deepCopyExpr(j.On), // 深度拷贝 Expr 接口
+			}
+			// 深度拷贝 Value map
+			if j.Value != nil {
+				copyObject.JoinTable[i].Value = make(map[string]any, len(j.Value))
+				for k, v := range j.Value {
+					copyObject.JoinTable[i].Value[k] = deepCopyValue(v)
+				}
+			}
+		}
+	}
+
+	// 拷贝 FieldParam (字符串切片)
+	if len(s.FieldParam) > 0 {
+		copyObject.FieldParam = make([]string, len(s.FieldParam))
+		copy(copyObject.FieldParam, s.FieldParam)
+	}
+
+	// 深度拷贝 WhereParam
+	if len(s.WhereParam) > 0 {
+		copyObject.WhereParam = make([]Expr, len(s.WhereParam))
+		for i, expr := range s.WhereParam {
+			copyObject.WhereParam[i] = deepCopyExpr(expr) // 深度拷贝 Expr 接口
+		}
+	}
+
+	// 深度拷贝 OrderParam
+	if len(s.OrderParam) > 0 {
+		copyObject.OrderParam = make([]Field, len(s.OrderParam))
+		for i, field := range s.OrderParam {
+			copyObject.OrderParam[i] = deepCopyField(field) // 深度拷贝 Field 接口
+		}
+	}
+
+	// 深度拷贝 GroupParam
+	if len(s.GroupParam) > 0 {
+		copyObject.GroupParam = make([]Field, len(s.GroupParam))
+		for i, field := range s.GroupParam {
+			copyObject.GroupParam[i] = deepCopyField(field) // 深度拷贝 Field 接口
+		}
+	}
+
+	// 深度拷贝 HavingParam
+	if s.HavingParam != nil {
+		copyObject.HavingParam = deepCopyExpr(s.HavingParam) // 深度拷贝 Expr 接口
+	}
+
+	// 深度拷贝 values map
+	if s.values != nil {
+		copyObject.values = make(map[string]any, len(s.values))
+		for k, v := range s.values {
+			copyObject.values[k] = deepCopyValue(v)
+		}
+	}
+
+	// 深度拷贝 UnionBuilder
+	if len(s.UnionBuilder) > 0 {
+		copyObject.UnionBuilder = make([]union, len(s.UnionBuilder))
+		for i, u := range s.UnionBuilder {
+			tableCopy := u.Table.Copy()
+			copyObject.UnionBuilder[i] = union{
+				JoinType: u.JoinType,
+				Table:    *tableCopy, // 递归拷贝
+			}
+		}
+	}
+
+	// 拷贝 insertColumns
+	if len(s.insertColumns) > 0 {
+		copyObject.insertColumns = make([]string, len(s.insertColumns))
+		copy(copyObject.insertColumns, s.insertColumns)
+	}
+
+	// 深度拷贝 insertValues
+	if len(s.insertValues) > 0 {
+		copyObject.insertValues = make([]any, len(s.insertValues))
+		for i, v := range s.insertValues {
+			copyObject.insertValues[i] = deepCopyValue(v)
+		}
+	}
+
+	// 深度拷贝 FromSubQuery
+	if s.FromSubQuery != nil {
+		copyObject.FromSubQuery = s.FromSubQuery.Copy() // 递归拷贝
+	}
+
+	// 深度拷贝 dmlData
+	if s.dmlData != nil {
+		copyObject.dmlData = deepCopyDmlData(s.dmlData, s.dmlType)
+	}
+
+	// 深度拷贝 deleteTarget
+	if s.deleteTarget != nil {
+		copyObject.deleteTarget = s.deleteTarget.Copy() // 递归拷贝
+	}
+
+	// 深度拷贝 customSetClauses
+	if len(s.customSetClauses) > 0 {
+		copyObject.customSetClauses = make([]setClause, len(s.customSetClauses))
+		for i, clause := range s.customSetClauses {
+			copyObject.customSetClauses[i] = setClause{
+				clause: clause.clause,
+			}
+			// 深度拷贝 params map
+			if clause.params != nil {
+				copyObject.customSetClauses[i].params = make(map[string]any, len(clause.params))
+				for k, v := range clause.params {
+					copyObject.customSetClauses[i].params[k] = deepCopyValue(v)
+				}
+			}
+		}
+	}
+
+	return copyObject
+}
+
+// deepCopyExpr 深度拷贝 Expr 接口
+func deepCopyExpr(expr Expr) Expr {
+	if expr == nil {
+		return nil
+	}
+
+	// 尝试类型断言为 Condition
+	if cond, ok := expr.(Condition); ok {
+		copyCond := Condition{
+			Name: cond.Name,
+			S:    cond.S,
+		}
+		// 深度拷贝 Value map
+		if cond.Value != nil {
+			copyValue := make(map[string]any, len(*cond.Value))
+			for k, v := range *cond.Value {
+				copyValue[k] = deepCopyValue(v)
+			}
+			copyCond.Value = &copyValue
+		}
+		return copyCond
+	}
+
+	// 如果无法识别类型，返回原值（保持引用）
+	// 注意：这可能导致不完全的深度拷贝
+	return expr
+}
+
+// deepCopyField 深度拷贝 Field 接口
+func deepCopyField(field Field) Field {
+	if field == nil {
+		return nil
+	}
+
+	// 尝试类型断言为 Fd
+	if fd, ok := field.(Fd); ok {
+		copyFd := Fd{
+			field: fd.field,
+			s:     fd.s,
+			as:    fd.as,
+		}
+		// 深度拷贝 values map
+		if fd.values != nil {
+			copyFd.values = make(map[string]any, len(fd.values))
+			for k, v := range fd.values {
+				copyFd.values[k] = deepCopyValue(v)
+			}
+		}
+		// 深度拷贝 v 切片
+		if len(fd.v) > 0 {
+			copyFd.v = make([]any, len(fd.v))
+			for i, v := range fd.v {
+				copyFd.v[i] = deepCopyValue(v)
+			}
+		}
+		return copyFd
+	}
+
+	// 如果无法识别类型，返回原值（保持引用）
+	// 注意：这可能导致不完全的深度拷贝
+	return field
+}
+
+// deepCopyValue 深度拷贝值类型
+func deepCopyValue(v any) any {
+	if v == nil {
+		return nil
+	}
+
+	switch val := v.(type) {
+	case map[string]any:
+		// 深度拷贝 map
+		copyMap := make(map[string]any, len(val))
+		for k, vv := range val {
+			copyMap[k] = deepCopyValue(vv)
+		}
+		return copyMap
+	case []map[string]any:
+		// 深度拷贝 []map[string]any
+		copySlice := make([]map[string]any, len(val))
+		for i, m := range val {
+			copySlice[i] = make(map[string]any, len(m))
+			for k, vv := range m {
+				copySlice[i][k] = deepCopyValue(vv)
+			}
+		}
+		return copySlice
+	case []any:
+		// 深度拷贝 []any
+		copySlice := make([]any, len(val))
+		for i, vv := range val {
+			copySlice[i] = deepCopyValue(vv)
+		}
+		return copySlice
+	case []string:
+		// 拷贝字符串切片
+		copySlice := make([]string, len(val))
+		copy(copySlice, val)
+		return copySlice
+	case []int:
+		copySlice := make([]int, len(val))
+		copy(copySlice, val)
+		return copySlice
+	case []int32:
+		copySlice := make([]int32, len(val))
+		copy(copySlice, val)
+		return copySlice
+	case []int64:
+		copySlice := make([]int64, len(val))
+		copy(copySlice, val)
+		return copySlice
+	case []float32:
+		copySlice := make([]float32, len(val))
+		copy(copySlice, val)
+		return copySlice
+	case []float64:
+		copySlice := make([]float64, len(val))
+		copy(copySlice, val)
+		return copySlice
+	case Expr:
+		// 深度拷贝 Expr 接口
+		return deepCopyExpr(val)
+	case Field:
+		// 深度拷贝 Field 接口
+		return deepCopyField(val)
+	default:
+		// 对于基本类型和其他类型，直接返回（值类型会复制，引用类型保持引用）
+		return v
+	}
+}
+
+// deepCopyDmlData 深度拷贝 DML 数据
+func deepCopyDmlData(data interface{}, dmlType string) interface{} {
+	if data == nil {
+		return nil
+	}
+
+	switch dmlType {
+	case "insert", "insert_ignore":
+		// map[string]any
+		if m, ok := data.(map[string]any); ok {
+			copyMap := make(map[string]any, len(m))
+			for k, v := range m {
+				copyMap[k] = deepCopyValue(v)
+			}
+			return copyMap
+		}
+	case "insert_many", "insert_ignore_many":
+		// []map[string]any
+		if rows, ok := data.([]map[string]any); ok {
+			copyRows := make([]map[string]any, len(rows))
+			for i, row := range rows {
+				copyRows[i] = make(map[string]any, len(row))
+				for k, v := range row {
+					copyRows[i][k] = deepCopyValue(v)
+				}
+			}
+			return copyRows
+		}
+	case "update", "update_ordered":
+		// map[string]any 或 []map[string]any
+		if m, ok := data.(map[string]any); ok {
+			copyMap := make(map[string]any, len(m))
+			for k, v := range m {
+				copyMap[k] = deepCopyValue(v)
+			}
+			return copyMap
+		}
+		if rows, ok := data.([]map[string]any); ok {
+			copyRows := make([]map[string]any, len(rows))
+			for i, row := range rows {
+				copyRows[i] = make(map[string]any, len(row))
+				for k, v := range row {
+					copyRows[i][k] = deepCopyValue(v)
+				}
+			}
+			return copyRows
+		}
+	case "insert_on_duplicate_cols":
+		// InsertOnDuplicateColsData
+		if d, ok := data.(InsertOnDuplicateColsData); ok {
+			copyRows := make([]map[string]any, len(d.Rows))
+			for i, row := range d.Rows {
+				copyRows[i] = make(map[string]any, len(row))
+				for k, v := range row {
+					copyRows[i][k] = deepCopyValue(v)
+				}
+			}
+			copyCols := make([]string, len(d.UpdateCols))
+			copy(copyCols, d.UpdateCols)
+			return InsertOnDuplicateColsData{
+				Rows:       copyRows,
+				UpdateCols: copyCols,
+			}
+		}
+	case "insert_on_duplicate_map":
+		// InsertOnDuplicateMapData
+		if d, ok := data.(InsertOnDuplicateMapData); ok {
+			copyRows := make([]map[string]any, len(d.Rows))
+			for i, row := range d.Rows {
+				copyRows[i] = make(map[string]any, len(row))
+				for k, v := range row {
+					copyRows[i][k] = deepCopyValue(v)
+				}
+			}
+			copyUpdate := make(map[string]any, len(d.Update))
+			for k, v := range d.Update {
+				copyUpdate[k] = deepCopyValue(v)
+			}
+			return InsertOnDuplicateMapData{
+				Rows:   copyRows,
+				Update: copyUpdate,
+			}
+		}
+	}
+
+	// 默认情况，尝试使用 deepCopyValue
+	return deepCopyValue(data)
+}
+
 // FromSub 将另一个构建器作为当前查询的 FROM 子查询来源
 // 示例：
-//   sub := Table("t").Select(...).Group(...).Label("sub")
-//   q := Table("").FromSub(sub).Select(q.Field("col")).Sql()
+//
+//	sub := Table("t").Select(...).Group(...).Label("sub")
+//	q := Table("").FromSub(sub).Select(q.Field("col")).Sql()
 func (s *SqlBuilder) FromSub(sub *SqlBuilder) *SqlBuilder {
-    s.FromSubQuery = sub
-    if sub != nil && sub.label != "" {
-        s.label = sub.label
-    }
-    return s
+	s.FromSubQuery = sub
+	if sub != nil && sub.label != "" {
+		s.label = sub.label
+	}
+	return s
 }
 
 // Select 设置查询的字段列表
@@ -305,10 +674,10 @@ func (s *SqlBuilder) buildInsertMap() (string, map[string]any) {
 		phs = append(phs, ":"+k)
 		insertParams[k] = v
 	}
-	
+
 	// 使用统一的参数合并方法
 	params := mergeParams(insertParams)
-	
+
 	var bf bytes.Buffer
 	bf.WriteString(s.getInsert())
 	bf.WriteString(" (")
@@ -526,7 +895,7 @@ func (s *SqlBuilder) buildUpdateMap() (string, map[string]any) {
 	}
 	// WHERE 子句
 	whereStr, whereParams := s.getWhere()
-	
+
 	// 使用统一的参数合并方法
 	params := mergeParams(setParams, tblParams, whereParams)
 
@@ -584,7 +953,7 @@ func (s *SqlBuilder) buildUpdateOrdered() (string, map[string]any) {
 	}
 	// WHERE 子句
 	whereStr, whereParams := s.getWhere()
-	
+
 	// 使用统一的参数合并方法
 	params := mergeParams(setParams, tblParams, whereParams)
 
@@ -828,26 +1197,26 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 	//}
 	var value map[string]any = map[string]any{}
 
-    bf := bytes.Buffer{}
-    // 优先使用子查询作为 FROM 来源
-    if s.FromSubQuery != nil {
-        tb, paramsData := s.FromSubQuery.subQuery()
-        bf.WriteString("(")
-        bf.WriteString(tb)
-        bf.WriteString(") ")
-        if s.label != "" {
-            bf.WriteString(s.label)
-        } else {
-            bf.WriteString("sub")
-        }
-        if paramsData != nil {
-            for k, v := range paramsData {
-                value[k] = v
-            }
-        }
-    } else {
-        bf.WriteString(s.Table.GetName())
-    }
+	bf := bytes.Buffer{}
+	// 优先使用子查询作为 FROM 来源
+	if s.FromSubQuery != nil {
+		tb, paramsData := s.FromSubQuery.subQuery()
+		bf.WriteString("(")
+		bf.WriteString(tb)
+		bf.WriteString(") ")
+		if s.label != "" {
+			bf.WriteString(s.label)
+		} else {
+			bf.WriteString("sub")
+		}
+		if paramsData != nil {
+			for k, v := range paramsData {
+				value[k] = v
+			}
+		}
+	} else {
+		bf.WriteString(s.Table.GetName())
+	}
 
 	if s.Table.Label != "" {
 		bf.WriteString(" AS ")
@@ -887,7 +1256,7 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 			}
 		}
 	}
-    if len(s.UnionBuilder) > 0 {
+	if len(s.UnionBuilder) > 0 {
 		endLen := 0
 		bf.WriteString("( ")
 		for _, tb := range s.UnionBuilder {
@@ -902,12 +1271,12 @@ func (s *SqlBuilder) getTable() (string, map[string]any) {
 			}
 		}
 		bf.Truncate(bf.Len() - endLen)
-        bf.WriteString(" ) ")
-        if s.label != "" {
-            bf.WriteString(s.label)
-        } else {
-            bf.WriteString("sub")
-        }
+		bf.WriteString(" ) ")
+		if s.label != "" {
+			bf.WriteString(s.label)
+		} else {
+			bf.WriteString("sub")
+		}
 	}
 
 	return bf.String(), value
@@ -1130,7 +1499,7 @@ func (s *SqlBuilder) Sql() (string, map[string]any) {
 // 示例:
 //   - Delete() -> DELETE FROM table WHERE ...
 //   - Delete(&table) -> DELETE table_alias FROM table WHERE ...
-//   使用: sql, params := builder.Table("user").Where(...).Delete().Sql()
+//     使用: sql, params := builder.Table("user").Where(...).Delete().Sql()
 func (s *SqlBuilder) Delete(t ...*SqlBuilder) *SqlBuilder {
 	s.dmlType = "delete"
 	if len(t) > 0 {
