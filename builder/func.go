@@ -338,3 +338,23 @@ func Rand() Fd {
 	f.LabelHandler()
 	return *f
 }
+
+func Cast(expr any, castType string) Fd {
+	str := fmt.Sprintf("CAST(%%v as %s)", castType)
+	f := &Fd{
+		v: []any{expr},
+		s: str,
+	}
+	f.LabelHandler()
+	return *f
+}
+
+func SubStringIndex(field Field, split string, nu int) Fd {
+	str := fmt.Sprintf("SUBSTRING_INDEX(%%v, '%s', %d)", split, nu)
+	f := &Fd{
+		v: []any{field},
+		s: str,
+	}
+	f.LabelHandler()
+	return *f
+}

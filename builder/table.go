@@ -475,10 +475,16 @@ func (s *SqlBuilder) FromSub(sub *SqlBuilder) *SqlBuilder {
 func (s *SqlBuilder) Select(fields ...any) *SqlBuilder {
 	for _, fd := range fields {
 		switch val := fd.(type) {
+		case []string:
+			s.FieldParam = append(s.FieldParam, val...)
 		case string:
 			s.FieldParam = append(s.FieldParam, val)
 		case Field:
 			s.FieldParam = append(s.FieldParam, val.String())
+		case []Field:
+			for _, f := range val {
+				s.FieldParam = append(s.FieldParam, f.String())
+			}
 		}
 	}
 	return s

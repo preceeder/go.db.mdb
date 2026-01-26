@@ -88,17 +88,15 @@ func (f *Fd) LabelHandler() {
 }
 
 func (f Fd) Desc() Fd {
-	if f.field != "" {
-		f.s = f.s + " DESC"
-		f.v = append(f.v, "DESC")
-	}
+	f.s = f.s + " DESC"
+	f.v = append(f.v, "DESC")
+
 	return f
 }
 func (f Fd) Asc() Fd {
-	if f.field != "" {
-		f.s = f.s + " ASC"
-		f.v = append(f.v, "ASC")
-	}
+	f.s = f.s + " ASC"
+	f.v = append(f.v, "ASC")
+	
 	return f
 }
 
